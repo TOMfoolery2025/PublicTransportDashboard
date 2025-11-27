@@ -2,9 +2,12 @@
 __pycache__/
 *.py[codz]
 *$py.class
-
+./data/*.txt
 # C extensions
 *.so
+.idea
+
+api/target
 
 # Distribution / packaging
 data/

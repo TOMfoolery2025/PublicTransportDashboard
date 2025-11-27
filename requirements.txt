@@ -1,1 +1,3 @@
+protobuf
 gtfs-realtime-bindings
+requests
