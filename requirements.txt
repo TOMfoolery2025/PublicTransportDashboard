@@ -1,3 +1,11 @@
+python-dotenv
+tqdm
+networkx
+shapely
+osmnx
+geopandas
+folium
+pandas
 protobuf
 gtfs-realtime-bindings
 requests
