@@ -14,7 +14,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # --- Configuration ---
-GTFS_ZIP_PATH = "data/data.zip"  # Ensure this path is correct
+GTFS_ZIP_PATH = "/Users/sergey/PycharmProjects/tomfoolery-hackathon/gtfw-data-stops-trips.zip"  # Ensure this path is correct
 # Check credentials
 driver = GraphDatabase.driver(os.getenv("NEO4J_URI"), auth=(os.getenv("NEO4J_USER"), os.getenv("NEO4J_PASSWORD")), encrypted=False)
 

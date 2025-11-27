@@ -1,21 +1,93 @@
+import os
+import zipfile
+import pandas as pd
 from flask import Flask, render_template, jsonify, request
 import networkx as nx
-import pickle
+from neo4j import GraphDatabase
+from dotenv import load_dotenv
 
 app = Flask(__name__)
 
-# Load the pre-processed graph and stops data
-GRAPH_PATH = "munich_graph.gpickle"
+load_dotenv()
 
-print("Loading transit graph...")
-with open(GRAPH_PATH, "rb") as f:
-    G = pickle.load(f)
-print("Graph loaded.")
+GTFS_ZIP_PATH = os.getenv("GTFS_ZIP_PATH", "gtfw-data-stops-trips.zip")
+TRAIN_ROUTE_TYPES = {0, 1, 2}
 
-# Limit to stops that participate in at least one edge
+
+def load_non_train_route_ids(zip_path):
+    """Read routes.txt to identify non-train route IDs (as strings)."""
+    with zipfile.ZipFile(zip_path, "r") as z:
+        with z.open("routes.txt") as f:
+            routes = pd.read_csv(f, dtype={"route_id": str})
+    return routes[~routes["route_type"].isin(TRAIN_ROUTE_TYPES)]["route_id"].unique().tolist()
+
+
+def fetch_graph_from_neo4j(route_ids):
+    """Load stops and edges from Neo4j filtered by the provided route IDs."""
+    uri = os.getenv("NEO4J_URI")
+    user = os.getenv("NEO4J_USER")
+    password = os.getenv("NEO4J_PASSWORD")
+    if not all([uri, user, password]):
+        raise RuntimeError("NEO4J_URI/NEO4J_USER/NEO4J_PASSWORD must be set in the environment.")
+
+    driver = GraphDatabase.driver(uri, auth=(user, password), encrypted=False)
+
+    def get_stops(tx):
+        query = """
+        MATCH (s:Stop)
+        RETURN toString(s.stop_id) AS stop_id, s.name AS stop_name, s.lat AS stop_lat, s.lon AS stop_lon
+        """
+        return [record.data() for record in tx.run(query)]
+
+    def get_edges(tx, route_ids):
+        query = """
+        MATCH (r:Route)-[:HAS_TRIP]->(t:Trip)-[:HAS_STOP_TIME]->(st1:StopTime)-[:NEXT]->(st2:StopTime)
+        WHERE r.route_id IN $route_ids
+        RETURN DISTINCT toString(st1.stop_id) AS source, toString(st2.stop_id) AS target
+        """
+        return [record.data() for record in tx.run(query, route_ids=route_ids)]
+
+    with driver.session() as session:
+        stops_data = session.execute_read(get_stops)
+        edges_data = session.execute_read(get_edges, route_ids=route_ids)
+
+    driver.close()
+    return stops_data, edges_data
+
+
+def build_graph(stops_data, edges_data):
+    """Construct a NetworkX graph from stop and edge records."""
+    G = nx.Graph()
+    for stop in stops_data:
+        lat, lon = stop.get("stop_lat"), stop.get("stop_lon")
+        if pd.isna(lat) or pd.isna(lon):
+            continue
+        G.add_node(
+            stop["stop_id"],
+            name=stop.get("stop_name", str(stop["stop_id"])),
+            pos=(lat, lon),
+        )
+
+    for edge in edges_data:
+        u = edge.get("source")
+        v = edge.get("target")
+        if u in G and v in G:
+            G.add_edge(u, v)
+
+    return G
+
+
+print("Loading route filters from GTFS zip...")
+NON_TRAIN_ROUTE_IDS = load_non_train_route_ids(GTFS_ZIP_PATH)
+print(f"Non-train routes: {len(NON_TRAIN_ROUTE_IDS)}")
+
+print("Fetching stops and edges from Neo4j...")
+stops_data, edges_data = fetch_graph_from_neo4j(NON_TRAIN_ROUTE_IDS)
+print(f"Fetched {len(stops_data)} stops and {len(edges_data)} edges.")
+
+G = build_graph(stops_data, edges_data)
 connected_nodes = {n for n, deg in G.degree() if deg > 0}
 
-# Build a lightweight stop list for the UI from the graph itself
 stops_list = sorted(
     [
         {
@@ -32,11 +104,10 @@ stops_list = sorted(
 
 
 def normalize_stop_id(raw_id):
-    """Convert numeric strings to int to match graph node types."""
-    try:
-        return int(raw_id)
-    except (TypeError, ValueError):
-        return raw_id
+    """Normalize stop IDs to string to match graph node types."""
+    if raw_id is None:
+        return None
+    return str(raw_id)
 
 @app.route('/')
 def index():
@@ -104,6 +175,8 @@ def get_network():
         u_pos = u_node.get("pos")
         v_pos = v_node.get("pos")
         if not u_pos or not v_pos:
+            continue
+        if u not in connected_nodes or v not in connected_nodes:
             continue
         edges.append(
             {
