@@ -12,7 +12,10 @@ GTFS_ZIP_PATH = "gtfw-data-stops-trips.zip"  # change if your file has another n
 
 # --- Get the boundary of Munich from OpenStreetMap ---
 print("Fetching Munich boundary from OpenStreetMap...")
-munich_boundary = ox.geocode_to_gdf("München, Germany")
+city = ox.geocode_to_gdf("München, Germany")
+municipality = ox.geocode_to_gdf("Landkreis München, Germany")
+combined = gpd.GeoDataFrame(geometry=[city.unary_union.union(municipality.unary_union)], crs="EPSG:4326")
+boundary_polygon = combined.unary_union
 print("Boundary fetched.")
 
 # --- Load GTFS data from ZIP ---
@@ -49,7 +52,7 @@ stops_gdf = gpd.GeoDataFrame(stops_with_coords, geometry=geometry, crs="EPSG:432
 
 # --- Filter for stops that are within the Munich boundary ---
 print("Filtering stops within Munich boundary...")
-stops_map = gpd.sjoin(stops_gdf, munich_boundary, how="inner", predicate="within")
+stops_map = gpd.sjoin(stops_gdf, boundary_polygon, how="inner", predicate="within")
 
 print(f"Processing {len(stops_map)} stops found within Munich.")
 if stops_map.empty:
@@ -117,7 +120,7 @@ route_weight = 1.5
 route_opacity = 0.8
 if has_shapes:
     # Get the single polygon geometry for Munich for efficient checking
-    boundary_polygon = munich_boundary.unary_union
+    boundary_polygon = boundary_polygon.unary_union
     relevant_shape_ids = trips_in_munich['shape_id'].dropna().unique()
     route_shapes = shapes[shapes['shape_id'].isin(relevant_shape_ids)].sort_values(by=['shape_pt_sequence'])
 
