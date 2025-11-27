@@ -64,29 +64,47 @@ document.addEventListener('DOMContentLoaded', () => {
 
         const edges = network.edges || [];
         const stops = network.stops || [];
+        const routes = network.routes || [];
 
         networkLayer = L.layerGroup();
-        edges.forEach(edge => {
-            if (!edge.coords) return;
-            L.polyline(edge.coords, {
-                color: '#2a3f6e',
-                weight: 1,
-                opacity: 0.35,
-                interactive: false,
-            }).addTo(networkLayer);
-        });
+
+        if (routes.length) {
+            routes.forEach(routeCoords => {
+                if (!routeCoords || routeCoords.length < 2) return;
+                L.polyline(routeCoords, {
+                    color: '#304771',
+                    weight: 0.5,
+                    opacity: 0.45,
+                    interactive: false,
+                }).addTo(networkLayer);
+            });
+        } else {
+            edges.forEach(edge => {
+                if (!edge.coords) return;
+                L.polyline(edge.coords, {
+                    color: '#2a3f6e',
+                    weight: 1.8,
+                    opacity: 0.4,
+                    interactive: false,
+                }).addTo(networkLayer);
+            });
+        }
 
         stopMarkers = L.layerGroup();
         stops.forEach(s => {
             if (!s.lat || !s.lon) return;
             L.circleMarker([s.lat, s.lon], {
                 radius: 3,
-                color: 'transparent',
+                stroke: true,
+                color: '#ffffff',   // stroke color
+                weight: 0.5,       // stroke width
                 fillColor: '#1b2f5b',
-                fillOpacity: 0.9,
-                weight: 0,
-            }).bindTooltip(s.stop_name, { direction: 'top', offset: [0, -4], opacity: 0.8 }).addTo(stopMarkers);
+                fillOpacity: 1
+            })
+            .bindTooltip(s.stop_name, { direction: 'top', offset: [0, -4], opacity: 0.8 })
+            .addTo(stopMarkers);
         });
+
 
         networkLayer.addTo(map);
         stopMarkers.addTo(map);

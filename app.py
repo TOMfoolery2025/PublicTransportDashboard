@@ -23,7 +23,7 @@ def load_non_train_route_ids(zip_path):
 
 
 def fetch_graph_from_neo4j(route_ids):
-    """Load stops and edges from Neo4j filtered by the provided route IDs."""
+    """Load stops, edges, and stop sequences from Neo4j filtered by the provided route IDs."""
     uri = os.getenv("NEO4J_URI")
     user = os.getenv("NEO4J_USER")
     password = os.getenv("NEO4J_PASSWORD")
@@ -47,12 +47,22 @@ def fetch_graph_from_neo4j(route_ids):
         """
         return [record.data() for record in tx.run(query, route_ids=route_ids)]
 
+    def get_sequences(tx, route_ids):
+        query = """
+        MATCH (r:Route)-[:HAS_TRIP]->(t:Trip)-[:HAS_STOP_TIME]->(st:StopTime)
+        WHERE r.route_id IN $route_ids
+        RETURN t.trip_id AS trip_id, toString(st.stop_id) AS stop_id, st.sequence AS seq
+        ORDER BY t.trip_id, seq
+        """
+        return [record.data() for record in tx.run(query, route_ids=route_ids)]
+
     with driver.session() as session:
         stops_data = session.execute_read(get_stops)
         edges_data = session.execute_read(get_edges, route_ids=route_ids)
+        sequences_data = session.execute_read(get_sequences, route_ids=route_ids)
 
     driver.close()
-    return stops_data, edges_data
+    return stops_data, edges_data, sequences_data
 
 
 def build_graph(stops_data, edges_data):
@@ -81,12 +91,45 @@ print("Loading route filters from GTFS zip...")
 NON_TRAIN_ROUTE_IDS = load_non_train_route_ids(GTFS_ZIP_PATH)
 print(f"Non-train routes: {len(NON_TRAIN_ROUTE_IDS)}")
 
-print("Fetching stops and edges from Neo4j...")
-stops_data, edges_data = fetch_graph_from_neo4j(NON_TRAIN_ROUTE_IDS)
-print(f"Fetched {len(stops_data)} stops and {len(edges_data)} edges.")
+print("Fetching stops, edges, and sequences from Neo4j...")
+stops_data, edges_data, sequences_data = fetch_graph_from_neo4j(NON_TRAIN_ROUTE_IDS)
+print(f"Fetched {len(stops_data)} stops, {len(edges_data)} edges, {len(sequences_data)} stop-time records.")
 
 G = build_graph(stops_data, edges_data)
 connected_nodes = {n for n, deg in G.degree() if deg > 0}
+
+# Build route polylines from stop sequences (deduplicated by trip)
+def build_route_geometries(seq_rows, graph, connected):
+    routes = []
+    current_trip = None
+    current_seq = []
+
+    def flush_route():
+        if len(current_seq) < 2:
+            return
+        coords = []
+        for stop_id in current_seq:
+            if stop_id not in graph or stop_id not in connected:
+                return
+            lat, lon = graph.nodes[stop_id].get("pos", (None, None))
+            if pd.isna(lat) or pd.isna(lon):
+                return
+            coords.append((lat, lon))
+        if len(coords) > 1:
+            routes.append(coords)
+
+    for row in seq_rows:
+        trip_id = row.get("trip_id")
+        stop_id = str(row.get("stop_id"))
+        if trip_id != current_trip:
+            flush_route()
+            current_trip = trip_id
+            current_seq = []
+        current_seq.append(stop_id)
+    flush_route()
+    return routes
+
+route_geometries = build_route_geometries(sequences_data, G, connected_nodes)
 
 stops_list = sorted(
     [
@@ -186,7 +229,12 @@ def get_network():
             }
         )
 
-    return jsonify({"stops": stops, "edges": edges})
+    routes = [
+        [(lat, lon) for lat, lon in coords]
+        for coords in route_geometries
+    ]
+
+    return jsonify({"stops": stops, "edges": edges, "routes": routes})
 
 if __name__ == '__main__':
     app.run(debug=True)
