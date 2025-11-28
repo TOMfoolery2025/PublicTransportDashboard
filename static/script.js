@@ -368,6 +368,29 @@ document.addEventListener('DOMContentLoaded', () => {
         return color;
     }
 
+    function addStopMarkersToLayer(stops, color) {
+        if (!stops || !stops.length || !activeRouteLayer) return;
+        stops.forEach(s => {
+            const lat = s.lat ?? s.stop_lat;
+            const lon = s.lon ?? s.stop_lon;
+            if (lat == null || lon == null) return;
+            const marker = L.circleMarker([lat, lon], {
+                radius: 3,
+                color: color,
+                weight: 1.2,
+                fillColor: '#fff',
+                fillOpacity: 0.9
+            }).bindTooltip(s.name || s.stop_name || s.id || s.stop_id || 'Stop');
+            marker.on('click', () => openStopPopup({
+                stop_id: s.id || s.stop_id,
+                stop_name: s.name || s.stop_name,
+                lat,
+                lon
+            }, marker));
+            marker.addTo(activeRouteLayer);
+        });
+    }
+
     async function openStopPopup(stop, marker) {
         try {
             const res = await fetch(`/api/stops/${encodeURIComponent(stop.stop_id)}`);
@@ -438,15 +461,18 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
+            // Determine mode/color
+            const routeMode = guessModeFromRouteName(routeName);
+            const routeColor = modeToColor(routeMode);
             // Determine if this is a bus route (we'll assume buses follow roads, others get straight lines)
-            const isBusRoute = routeName.match(/^\d/) || routeName.toLowerCase().includes('bus');
+            const isBusRoute = routeMode === 'Bus' || routeName.match(/^\d/) || routeName.toLowerCase().includes('bus');
             
             if (isBusRoute) {
                 // For bus routes, use OSRM to get proper road geometry
-                await drawRouteWithOSRM(routeName, data.segments);
+                await drawRouteWithOSRM(routeName, data.segments, data.stops || [], routeColor);
             } else {
                 // For rail routes (U-Bahn, S-Bahn, Tram), use straight lines
-                await drawRouteStraight(routeName, data.segments);
+                await drawRouteStraight(routeName, data.segments, data.stops || [], routeColor);
             }
         } catch (err) {
             console.warn('Failed to draw route', err);
@@ -454,7 +480,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    async function drawRouteWithOSRM(routeName, segments) {
+    async function drawRouteWithOSRM(routeName, segments, stops, color) {
         try {
             // Extract all unique coordinates from segments
             const allCoords = [];
@@ -483,12 +509,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (data.routes && data.routes.length > 0) {
                 const routeGeometry = decodePolyline(data.routes[0].geometry, 5);
-                activeRouteLayer = L.polyline(routeGeometry, {
-                    color: '#582C83', // Bus purple
+                activeRouteLayer = L.layerGroup();
+                L.polyline(routeGeometry, {
+                    color: color,
                     weight: 6,
                     opacity: 0.9,
                     className: 'bus-route-line'
-                }).addTo(map);
+                }).addTo(activeRouteLayer);
+                addStopMarkersToLayer(stops, color);
+                activeRouteLayer.addTo(map);
 
                 // Fit bounds to the OSRM route
                 if (routeGeometry.length) {
@@ -498,15 +527,15 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                 // Fallback to straight lines if OSRM fails
                 console.warn('OSRM failed, falling back to straight lines');
-                await drawRouteStraight(routeName, segments);
+                await drawRouteStraight(routeName, segments, stops, color);
             }
         } catch (error) {
             console.warn('OSRM routing failed, using straight lines', error);
-            await drawRouteStraight(routeName, segments);
+            await drawRouteStraight(routeName, segments, stops, color);
         }
     }
 
-    async function drawRouteStraight(routeName, segments) {
+    async function drawRouteStraight(routeName, segments, stops, color) {
         const polylines = segments.map(seg => {
             return [[seg.from.lat, seg.from.lon], [seg.to.lat, seg.to.lon]];
         });
@@ -514,18 +543,19 @@ document.addEventListener('DOMContentLoaded', () => {
         activeRouteLayer = L.layerGroup();
         polylines.forEach(coords => {
             L.polyline(coords, {
-                color: '#e53935',
+                color: color || '#e53935',
                 weight: 4,
                 opacity: 0.9
             }).addTo(activeRouteLayer);
         });
+        addStopMarkersToLayer(stops, color || '#e53935');
         activeRouteLayer.addTo(map);
         
         const allPts = polylines.flat();
         if (allPts.length) {
             map.fitBounds(allPts, { padding: [40, 40] });
-        }
-        setStatus(`Showing route ${routeName}`, 'success');
+            }
+            setStatus(`Showing route ${routeName}`, 'success');
     }
 
     async function drawTripRoute(tripId, routeName) {
@@ -548,18 +578,23 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             const coords = data.stops.map(s => [s.lat, s.lon]);
-            const isBusRoute = routeName && (routeName.match(/^\d/) || routeName.toLowerCase().includes('bus'));
+            const routeMode = guessModeFromRouteName(routeName || '');
+            const routeColor = modeToColor(routeMode);
+            const isBusRoute = routeMode === 'Bus' || (routeName && (routeName.match(/^\d/) || routeName.toLowerCase().includes('bus')));
 
             if (isBusRoute && coords.length >= 2) {
                 // For bus trips, use OSRM
-                await drawTripWithOSRM(tripId, routeName, coords);
+                await drawTripWithOSRM(tripId, routeName, coords, data.stops, routeColor);
             } else {
                 // For rail trips, use straight lines
-                activeRouteLayer = L.polyline(coords, {
-                    color: '#e53935',
+                activeRouteLayer = L.layerGroup();
+                L.polyline(coords, {
+                    color: routeColor,
                     weight: 5,
                     opacity: 0.9
-                }).addTo(map);
+                }).addTo(activeRouteLayer);
+                addStopMarkersToLayer(data.stops, routeColor);
+                activeRouteLayer.addTo(map);
                 
                 if (coords.length) {
                     map.fitBounds(coords, { padding: [40, 40] });
@@ -572,7 +607,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    async function drawTripWithOSRM(tripId, routeName, coords) {
+    async function drawTripWithOSRM(tripId, routeName, coords, stops, color) {
         try {
             // Convert to OSRM format
             const osrmCoords = coords.map(coord => `${coord[1]},${coord[0]}`).join(';');
@@ -583,12 +618,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (data.routes && data.routes.length > 0) {
                 const routeGeometry = decodePolyline(data.routes[0].geometry, 5);
-                activeRouteLayer = L.polyline(routeGeometry, {
-                    color: '#582C83', // Bus purple
+                activeRouteLayer = L.layerGroup();
+                L.polyline(routeGeometry, {
+                    color: color,
                     weight: 6,
                     opacity: 0.9,
                     className: 'bus-route-line'
-                }).addTo(map);
+                }).addTo(activeRouteLayer);
+                addStopMarkersToLayer(stops, color);
+                activeRouteLayer.addTo(map);
 
                 if (routeGeometry.length) {
                     map.fitBounds(routeGeometry, { padding: [40, 40] });
@@ -596,11 +634,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 setStatus(`Showing bus trip ${tripId} (${routeName}) following roads`, 'success');
             } else {
                 // Fallback to straight lines
-                activeRouteLayer = L.polyline(coords, {
-                    color: '#582C83',
+                activeRouteLayer = L.layerGroup();
+                L.polyline(coords, {
+                    color: color,
                     weight: 5,
                     opacity: 0.9
-                }).addTo(map);
+                }).addTo(activeRouteLayer);
+                addStopMarkersToLayer(stops, color);
+                activeRouteLayer.addTo(map);
                 
                 if (coords.length) {
                     map.fitBounds(coords, { padding: [40, 40] });
@@ -610,11 +651,14 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (error) {
             console.warn('OSRM routing failed, using straight lines', error);
             // Fallback to straight lines
-            activeRouteLayer = L.polyline(coords, {
-                color: '#582C83',
+            activeRouteLayer = L.layerGroup();
+            L.polyline(coords, {
+                color: color,
                 weight: 5,
                 opacity: 0.9
-            }).addTo(map);
+            }).addTo(activeRouteLayer);
+            addStopMarkersToLayer(stops, color);
+            activeRouteLayer.addTo(map);
             
             if (coords.length) {
                 map.fitBounds(coords, { padding: [40, 40] });

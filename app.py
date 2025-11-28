@@ -313,17 +313,21 @@ def get_trip_stops(trip_id):
 def get_route_by_name(route_name):
     """
     Return edges for a given route name so the frontend can display its shape.
-    We return simple segments between stops that share the same route_name.
+    We return simple segments between stops that share the same route_name
+    plus the unique stops for drawing markers.
     """
     query = """
     MATCH (a:Stop)-[r:TRANSIT_ROUTE {route_name: $route_name}]-(b:Stop)
     RETURN DISTINCT a.stop_id AS from_id, a.lat AS from_lat, a.lon AS from_lon,
-                    b.stop_id AS to_id, b.lat AS to_lat, b.lon AS to_lon
+                    b.stop_id AS to_id, b.lat AS to_lat, b.lon AS to_lon,
+                    collect(DISTINCT {id: a.stop_id, name: a.name, lat: a.lat, lon: a.lon}) AS stops_a,
+                    collect(DISTINCT {id: b.stop_id, name: b.name, lat: b.lat, lon: b.lon}) AS stops_b
     """
     try:
         with driver.session() as session:
             result = session.run(query, route_name=route_name)
             segments = []
+            stops_set = {}
             for record in result:
                 segments.append({
                     "from": {
@@ -337,9 +341,13 @@ def get_route_by_name(route_name):
                         "lon": record["to_lon"]
                     }
                 })
+                for s in record.get("stops_a", []):
+                    stops_set[str(s["id"])] = s
+                for s in record.get("stops_b", []):
+                    stops_set[str(s["id"])] = s
         if not segments:
             return jsonify({"segments": [], "route_name": route_name, "message": "No segments found"}), 404
-        return jsonify({"segments": segments, "route_name": route_name})
+        return jsonify({"segments": segments, "route_name": route_name, "stops": list(stops_set.values())})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
