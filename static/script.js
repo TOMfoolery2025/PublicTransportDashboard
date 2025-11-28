@@ -20,14 +20,29 @@ document.addEventListener('DOMContentLoaded', () => {
     let startMarker = null;
     let endMarker = null;
 
-    // Initial Dots
+    // Initial stop dots (only show after a zoom threshold to keep map clean)
+    const STOP_VISIBILITY_ZOOM = 15;
+    const stopsLayer = L.layerGroup();
     if (stops.length > 0) {
         stops.forEach(s => {
             L.circleMarker([s.lat, s.lon], {
-                radius: 2, color: '#444', weight: 0.5, fillColor: '#fff', fillOpacity: 0.5
-            }).addTo(map).bindTooltip(s.stop_name);
+                radius: 2,
+                color: '#444',
+                weight: 0.5,
+                fillColor: '#fff',
+                fillOpacity: 0.5
+            }).bindTooltip(s.stop_name).addTo(stopsLayer);
         });
     }
+    const updateStopVisibility = () => {
+        if (map.getZoom() >= STOP_VISIBILITY_ZOOM) {
+            if (!map.hasLayer(stopsLayer)) map.addLayer(stopsLayer);
+        } else {
+            if (map.hasLayer(stopsLayer)) map.removeLayer(stopsLayer);
+        }
+    };
+    map.on('zoomend', updateStopVisibility);
+    updateStopVisibility();
 
     let activeLayers = [];
 
