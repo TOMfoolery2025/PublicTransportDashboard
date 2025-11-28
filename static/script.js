@@ -278,6 +278,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function handleMapClick(e) {
+        // Clear any drawn route when user clicks elsewhere
+        if (activeRouteLayer) {
+            map.removeLayer(activeRouteLayer);
+            activeRouteLayer = null;
+        }
+
         if (!mapPinMode) return;
         const target = mapPinMode;
         const location = {
