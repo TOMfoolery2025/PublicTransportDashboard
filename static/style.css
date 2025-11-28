@@ -240,6 +240,12 @@ body {
     position: relative;
 }
 
+.field__row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
 .field input[type="text"] {
     width: 100%;
     padding: 12px 14px;
@@ -254,6 +260,32 @@ body {
 
 .field input[type="text"]:focus {
     border-color: var(--accent);
+}
+
+.pin-btn {
+    min-width: 44px;
+    height: 44px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--panel-2);
+    color: var(--text);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,0.02);
+    transition: transform 100ms ease, box-shadow 120ms ease, border-color 120ms ease;
+}
+
+.pin-btn:hover {
+    border-color: var(--accent);
+    box-shadow: 0 6px 16px rgba(0,0,0,0.25);
+}
+
+.pin-btn:active {
+    transform: translateY(1px);
+    box-shadow: none;
 }
 
 /* Enhanced Route Summary */
