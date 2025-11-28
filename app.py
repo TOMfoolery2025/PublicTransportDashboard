@@ -3,6 +3,7 @@ from flask import Flask, render_template, jsonify, request
 from neo4j import GraphDatabase
 from dotenv import load_dotenv
 from geopy.distance import geodesic
+import requests
 
 
 app = Flask(__name__)
@@ -13,6 +14,7 @@ NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
 NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
 NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password")
 NEO4J_DB = "gtfs"
+STOPS_API_URL = "https://civiguild.com/api/stops"
 
 driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
 
@@ -21,17 +23,33 @@ driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
 # We load these once at startup.
 # IMPORTANT: We use the exact keys your 'index.html' expects ("stop_id", "stop_name").
 def load_all_stops():
-    print("Loading stops from Neo4j...")
-    query = """
-    MATCH (s:Stop) 
-    RETURN s.stop_id AS stop_id, s.name AS stop_name, s.lat AS lat, s.lon AS lon
-    ORDER BY s.name
-    """
-    with driver.session() as session:
-        result = session.run(query)
-        data = [record.data() for record in result]
-    print(f"Cached {len(data)} stops.")
-    return data
+    print(f"Fetching stops from {STOPS_API_URL}...")
+    try:
+        # Request data from your external server
+        response = requests.get(STOPS_API_URL)
+        response.raise_for_status()  # Check for 200 OK
+
+        raw_data = response.json()
+
+        # Transform the data to match what index.html expects
+        clean_data = []
+        for item in raw_data:
+            # Your JSON uses 'stop_lat', but frontend might expect 'lat'.
+            # We map it here.
+            clean_data.append({
+                "stop_id": str(item.get("stop_id")),  # Convert to string for HTML value safety
+                "stop_name": item.get("stop_name"),
+                "lat": item.get("stop_lat"),
+                "lon": item.get("stop_lon")
+            })
+
+        print(f"Cached {len(clean_data)} stops from API.")
+        return clean_data
+
+    except Exception as e:
+        print(f"Error fetching stops from API: {e}")
+        # Return empty list or fallback to local file if you have one
+        return []
 
 
 # Load immediately on start
