@@ -330,6 +330,15 @@ document.addEventListener('DOMContentLoaded', () => {
         return 'Bus';
     }
 
+    function modeToColor(mode) {
+        let color = MODE_COLORS[mode] || MODE_COLORS['Bus'];
+        if (mode && mode.includes("Bus")) color = MODE_COLORS['Bus'];
+        if (mode && mode.includes("Tram")) color = MODE_COLORS['Tram'];
+        if (mode && mode.includes("U-Bahn")) color = MODE_COLORS['U-Bahn'];
+        if (mode && mode.includes("S-Bahn")) color = MODE_COLORS['S-Bahn'];
+        return color;
+    }
+
     async function openStopPopup(stop, marker) {
         try {
             const res = await fetch(`/api/stops/${encodeURIComponent(stop.stop_id)}`);
@@ -401,13 +410,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 setStatus(`No geometry for route ${routeName}`, 'error');
                 return;
             }
+            const routeMode = guessModeFromRouteName(routeName);
+            const routeColor = modeToColor(routeMode);
             const polylines = data.segments.map(seg => {
                 return [[seg.from.lat, seg.from.lon], [seg.to.lat, seg.to.lon]];
             });
             activeRouteLayer = L.layerGroup();
             polylines.forEach(coords => {
                 L.polyline(coords, {
-                    color: '#e53935',
+                    color: routeColor,
                     weight: 4,
                     opacity: 0.9
                 }).addTo(activeRouteLayer);
@@ -442,8 +453,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
             const coords = data.stops.map(s => [s.lat, s.lon]);
+            const routeMode = guessModeFromRouteName(routeName || '');
+            const routeColor = modeToColor(routeMode);
             activeRouteLayer = L.polyline(coords, {
-                color: '#e53935',
+                color: routeColor,
                 weight: 5,
                 opacity: 0.9
             }).addTo(map);
