@@ -15,3 +15,11 @@ serde = { version = "1.0.228", features = ["derive"] }
 neo4rs = {version = "0.9.0-rc.9", features = ["json"]}
 chrono = {version = "0.4.26", features = ["serde"]}
 chrono-tz = {version = "0.10"}
+dashmap = {version = "6.1.0", features = ["serde"]}
+prost = {version = "0.14.1", features = ["derive"]}
+prost-types = {version = "0.14.1"}
+bytes = "1"
+
+[build-dependencies]
+prost-build = "0.14.1"
+protoc-fetcher = "0.1.2"

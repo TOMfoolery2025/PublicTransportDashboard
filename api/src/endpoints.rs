@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use chrono::Local;
 use chrono_tz::Europe::Berlin;
 use gtfs_structures::Agency;
@@ -15,7 +16,7 @@ use rocket::serde::json::serde_json;
 use rocket_db_pools::sqlx::Row;
 use rocket_db_pools::sqlx::sqlite::SqliteRow;
 use crate::{Transport};
-
+use crate::liveupdates::{update_listener, Departure, UpdateStore};
 
 #[derive(Serialize)]
 #[serde(crate = "rocket::serde")]
@@ -44,10 +45,21 @@ pub struct TripDTO {
     route_id: i64,
     service_id: i64,
     route_short_name: String,
-    departure_time: String,
+    departure_timestamp: i64,
+    delay: i32,
+    live: bool
 }
 
 
+#[derive(Serialize)]
+#[serde(crate = "rocket::serde")]
+pub struct StopDTO {
+    sequence: i64,
+    stop_id: i64,
+    stop_name: String,
+    stop_lat: f64,
+    stop_lon: f64,
+}
 
 #[get("/agency/<id>")]
 pub async fn agency_by_id(mut db: Connection<Transport>, id: i64) -> Result<Json<AgencyDTO>, Status> {
@@ -99,38 +111,81 @@ pub async fn all_stops(graph_database: &State<Graph>) -> Result<Json<Vec<StopGra
 }
 
 #[get("/departures/<stop_id>")]
-pub async fn departures_at_stop(mut db: Connection<Transport>, stop_id: i64)
-    -> Result<Json<Vec<TripDTO>>, Status> {
+pub async fn departures_at_stop(mut db: Connection<Transport>,
+                                mut update_store: &State<Arc<UpdateStore>>,
+                                stop_id: i64) -> Result<Json<Vec<TripDTO>>, Status> {
     let now_local = Local::now();
     let cest_time = now_local.with_timezone(&Berlin);
-    let current_time: String = cest_time.format("%H:%M:%S").to_string();
+    let scheduled_departures_option = update_store.scheduled_departures.get(&stop_id);
+    let mut trips: Vec<TripDTO> = Vec::new();
+    if scheduled_departures_option.is_none() {
+        println!("No scheduled departures found");
+        return Ok(Json(trips));
+    }
+    let scheduled_departures = scheduled_departures_option.unwrap();
+    println!("Found {} scheduled departures at stop {}", scheduled_departures.len(), stop_id);
+    // Construct a list of TRIP DTOs using 1 big SQL query
+    scheduled_departures.iter().for_each(|departure| {
+        let departure_total_time: i64 =
+            departure.departure.timestamp + departure.departure.delay as i64;
+        if departure_total_time >= cest_time.timestamp() {
+            let query = sqlx::query(
+                "SELECT Trips.trip_id, Trips.route_id, Trips.service_id,
+                Routes.route_short_name
+                FROM Trips
+                JOIN Routes ON Trips.route_id = Routes.route_id
+                WHERE Trips.trip_id = ?;"
+            )
+                .bind(departure.trip_id)
+                .fetch_one(&mut **db);
+            if let Ok(row) = futures::executor::block_on(query) {
+                let trip_dto = TripDTO {
+                    trip_id: row.get::<i64, _>("trip_id"),
+                    route_id: row.get::<i64, _>("route_id"),
+                    service_id: row.get::<i64, _>("service_id"),
+                    route_short_name: row.get::<String, _>("route_short_name"),
+                    departure_timestamp: departure.departure.timestamp,
+                    delay: departure.departure.delay,
+                    live: true
+                };
+                trips.push(trip_dto);
+            }
+
+        }
+    });
+
+
+    Ok(Json(trips))
+}
+
+
+
+#[get("/trips/allStops/<trip_id>")]
+pub async fn all_stops_for_trip(mut db: Connection<Transport>, trip_id: i64) -> Result<Json<Vec<StopDTO>>, Status> {
     let query = sqlx::query(
-        "SELECT Trips.trip_id, Trips.route_id, Trips.service_id,
-       Routes.route_short_name, StopTimes.departure_time
+        "SELECT StopTimes.stop_sequence, Stops.stop_id, Stops.stop_name,
+        Stops.stop_lat, Stops.stop_lon
         FROM StopTimes
-        JOIN Trips ON StopTimes.trip_id = Trips.trip_id
-        JOIN Routes ON Trips.route_id = Routes.route_id
-        WHERE StopTimes.stop_id = ? AND StopTimes.departure_time >= ?
-        ORDER BY StopTimes.departure_time
-        LIMIT 10;"
+        JOIN Stops ON StopTimes.stop_id = Stops.stop_id
+        WHERE StopTimes.trip_id = ?
+        ORDER BY StopTimes.stop_sequence;"
     )
-        .bind(stop_id)
-        .bind(current_time)
+        .bind(trip_id)
         .fetch_all(&mut **db)
         .await;
     if let Ok(rows) = query {
-        let mut trips: Vec<TripDTO> = Vec::new();
+        let mut stops: Vec<StopDTO> = Vec::new();
         for row in rows {
-            let trip = TripDTO {
-                trip_id: row.get::<i64, _>("trip_id"),
-                route_id: row.get::<i64, _>("route_id"),
-                service_id: row.get::<i64, _>("service_id"),
-                route_short_name: row.get::<String, _>("route_short_name"),
-                departure_time: row.get::<String, _>("departure_time"),
+            let stop = StopDTO {
+                sequence: row.get::<i64, _>("stop_sequence"),
+                stop_id: row.get::<i64, _>("stop_id"),
+                stop_name: row.get::<String, _>("stop_name"),
+                stop_lat: row.get::<f64, _>("stop_lat"),
+                stop_lon: row.get::<f64, _>("stop_lon"),
             };
-            trips.push(trip);
+            stops.push(stop);
         }
-        Ok(Json(trips))
+        Ok(Json(stops))
     } else {
         Err(Status::InternalServerError)
     }
