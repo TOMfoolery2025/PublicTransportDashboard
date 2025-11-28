@@ -26,12 +26,18 @@
             <section class="controls-card">
                 <div class="field">
                     <label for="start-stop">Start location</label>
-                    <input type="text" id="start-stop" placeholder="Type an address, place, or transit stop...">
+                    <div class="field__row">
+                        <input type="text" id="start-stop" placeholder="Type an address, place, or transit stop...">
+                        <button type="button" id="start-pin-btn" class="pin-btn" title="Pin start on map">📍</button>
+                    </div>
                     <div id="start-results" class="autocomplete-results"></div>
                 </div>
                 <div class="field">
                     <label for="end-stop">Destination</label>
-                    <input type="text" id="end-stop" placeholder="Type an address, place, or transit stop...">
+                    <div class="field__row">
+                        <input type="text" id="end-stop" placeholder="Type an address, place, or transit stop...">
+                        <button type="button" id="end-pin-btn" class="pin-btn" title="Pin destination on map">📍</button>
+                    </div>
                     <div id="end-results" class="autocomplete-results"></div>
                 </div>
                 <button id="find-path-btn" class="cta">Draw route</button>

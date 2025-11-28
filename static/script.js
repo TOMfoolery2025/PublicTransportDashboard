@@ -2,6 +2,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const stops = window.STOP_DATA || [];
     const startInput = document.getElementById('start-stop');
     const endInput = document.getElementById('end-stop');
+    const startPinBtn = document.getElementById('start-pin-btn');
+    const endPinBtn = document.getElementById('end-pin-btn');
     const startResults = document.getElementById('start-results');
     const endResults = document.getElementById('end-results');
     const statusEl = document.getElementById('status');
@@ -19,6 +21,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let activeSelection = 'start';
     let startMarker = null;
     let endMarker = null;
+    let mapPinMode = null;
 
     // Initial stop dots (only show after a zoom threshold to keep map clean)
     const STOP_VISIBILITY_ZOOM = 15;
@@ -241,10 +244,12 @@ document.addEventListener('DOMContentLoaded', () => {
     // Initialize autocomplete for both inputs
     setupAutocomplete(startInput, startResults, (location) => {
         setSelection('start', location);
+        mapPinMode = null;
     });
     
     setupAutocomplete(endInput, endResults, (location) => {
         setSelection('end', location);
+        mapPinMode = null;
     });
 
     // Update button state based on selection
@@ -261,7 +266,8 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function handleMapClick(e) {
-        const target = activeSelection || (!selectedStart ? 'start' : 'end');
+        if (!mapPinMode) return;
+        const target = mapPinMode;
         const location = {
             label: `Pinned location (${e.latlng.lat.toFixed(5)}, ${e.latlng.lng.toFixed(5)})`,
             lat: e.latlng.lat,
@@ -270,9 +276,22 @@ document.addEventListener('DOMContentLoaded', () => {
         };
         setSelection(target, location);
         setStatus(`Pinned ${target} location on map`, 'idle');
+        mapPinMode = null;
     }
 
     map.on('click', handleMapClick);
+
+    startPinBtn.addEventListener('click', () => {
+        mapPinMode = 'start';
+        activeSelection = 'start';
+        setStatus('Click on the map to set start point', 'idle');
+    });
+
+    endPinBtn.addEventListener('click', () => {
+        mapPinMode = 'end';
+        activeSelection = 'end';
+        setStatus('Click on the map to set destination', 'idle');
+    });
 
     function decodePolyline(str, precision) {
         var index = 0, lat = 0, lng = 0, coordinates = [], shift = 0, result = 0, byte = null, latitude_change, longitude_change, factor = Math.pow(10, precision || 5);
