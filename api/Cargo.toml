@@ -7,9 +7,11 @@ edition = "2024"
 rocket = { version = "0.5.1", features = ["json"] }
 rustls = "0.23.35"
 tokio = { version = "1", features = ["full"] }
-reqwest = { version = "0.12", features = ["rustls-tls", "gzip"] }
+reqwest = { version = "0.12", features = ["rustls-tls", "gzip", "deflate", "brotli"] }
 dotenvy = "0.15.7"
 gtfs-structures = "0.46.1"
 rocket_db_pools = {version = "0.2.0", features = ["sqlx_sqlite"]}
 serde = { version = "1.0.228", features = ["derive"] }
 neo4rs = {version = "0.9.0-rc.9", features = ["json"]}
+chrono = {version = "0.4.26", features = ["serde"]}
+chrono-tz = {version = "0.10"}

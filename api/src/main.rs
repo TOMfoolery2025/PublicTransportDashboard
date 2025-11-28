@@ -4,6 +4,8 @@ use rocket_db_pools::{sqlx, Database};
 #[database("transport")]
 struct Transport(sqlx::SqlitePool);
 mod endpoints;
+mod liveupdates;
+
 use dotenvy::dotenv;
 use std::env;
 use neo4rs::Graph;
@@ -26,6 +28,6 @@ async fn rocket() -> _ {
         .attach(Transport::init())
         .manage(graph)
         .mount("/", routes![
-            endpoints::agency_by_id, endpoints::all_stops
+            endpoints::agency_by_id, endpoints::all_stops, endpoints::departures_at_stop
         ])
 }

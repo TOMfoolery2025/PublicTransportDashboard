@@ -1,3 +1,5 @@
+use chrono::Local;
+use chrono_tz::Europe::Berlin;
 use gtfs_structures::Agency;
 use neo4rs::{query, Graph};
 use rocket::{Rocket, Build, futures, post, get, delete, Error, Response, response, State};
@@ -34,6 +36,17 @@ pub struct StopGraphDTO {
     stop_lat: f64,
     stop_lon: f64,
 }
+
+#[derive(Serialize)]
+#[serde(crate = "rocket::serde")]
+pub struct TripDTO {
+    trip_id: i64,
+    route_id: i64,
+    service_id: i64,
+    route_short_name: String,
+    departure_time: String,
+}
+
 
 
 #[get("/agency/<id>")]
@@ -85,3 +98,40 @@ pub async fn all_stops(graph_database: &State<Graph>) -> Result<Json<Vec<StopGra
     }
 }
 
+#[get("/departures/<stop_id>")]
+pub async fn departures_at_stop(mut db: Connection<Transport>, stop_id: i64)
+    -> Result<Json<Vec<TripDTO>>, Status> {
+    let now_local = Local::now();
+    let cest_time = now_local.with_timezone(&Berlin);
+    let current_time: String = cest_time.format("%H:%M:%S").to_string();
+    let query = sqlx::query(
+        "SELECT Trips.trip_id, Trips.route_id, Trips.service_id,
+       Routes.route_short_name, StopTimes.departure_time
+        FROM StopTimes
+        JOIN Trips ON StopTimes.trip_id = Trips.trip_id
+        JOIN Routes ON Trips.route_id = Routes.route_id
+        WHERE StopTimes.stop_id = ? AND StopTimes.departure_time >= ?
+        ORDER BY StopTimes.departure_time
+        LIMIT 10;"
+    )
+        .bind(stop_id)
+        .bind(current_time)
+        .fetch_all(&mut **db)
+        .await;
+    if let Ok(rows) = query {
+        let mut trips: Vec<TripDTO> = Vec::new();
+        for row in rows {
+            let trip = TripDTO {
+                trip_id: row.get::<i64, _>("trip_id"),
+                route_id: row.get::<i64, _>("route_id"),
+                service_id: row.get::<i64, _>("service_id"),
+                route_short_name: row.get::<String, _>("route_short_name"),
+                departure_time: row.get::<String, _>("departure_time"),
+            };
+            trips.push(trip);
+        }
+        Ok(Json(trips))
+    } else {
+        Err(Status::InternalServerError)
+    }
+}
