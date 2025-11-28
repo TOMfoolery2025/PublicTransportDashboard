@@ -211,22 +211,36 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    const makeMinimalPin = (color) => {
+        const svg = `
+        <svg xmlns='http://www.w3.org/2000/svg' width='18' height='24' viewBox='0 0 18 24'>
+            <path d='M9 22c0-2-6-6-6-12a6 6 0 0 1 12 0c0 6-6 10-6 12Z' fill='${color}' stroke='${color}' stroke-width='2'/>
+        </svg>`;
+        return L.icon({
+            iconUrl: 'data:image/svg+xml;utf8,' + encodeURIComponent(svg),
+            iconSize: [18, 24],
+            iconAnchor: [9, 22],
+            tooltipAnchor: [0, -14]
+        });
+    };
+
+    const startPinIcon = makeMinimalPin('#12784f');
+    const endPinIcon = makeMinimalPin('#b12a2a');
+
     function setMarker(type, location) {
         const latLng = [location.lat, location.lon];
-        const markerOptions = {
-            radius: 8,
-            color: '#000',
-            fillOpacity: 1,
-            weight: 2
-        };
+        const tooltipText = type === 'start'
+            ? `Start: ${location.label || location.stop_name || 'Pinned start'}`
+            : `End: ${location.label || location.stop_name || 'Pinned destination'}`;
+
         if (type === 'start') {
             if (startMarker) map.removeLayer(startMarker);
-            startMarker = L.circleMarker(latLng, { ...markerOptions, fillColor: '#4CAF50' })
+            startMarker = L.marker(latLng, { icon: startPinIcon, keyboard: false })
                 .addTo(map)
                 .bindTooltip(`Start: ${location.label || location.stop_name || 'Pinned start'}`);
         } else {
             if (endMarker) map.removeLayer(endMarker);
-            endMarker = L.circleMarker(latLng, { ...markerOptions, fillColor: '#F44336' })
+            endMarker = L.marker(latLng, { icon: endPinIcon, keyboard: false })
                 .addTo(map)
                 .bindTooltip(`End: ${location.label || location.stop_name || 'Pinned destination'}`);
         }
