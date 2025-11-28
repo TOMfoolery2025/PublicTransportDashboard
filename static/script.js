@@ -318,6 +318,18 @@ document.addEventListener('DOMContentLoaded', () => {
         return `${(mins / 60).toFixed(1)} h`;
     }
 
+    function guessModeFromRouteName(name) {
+        if (!name) return 'Bus';
+        const upper = String(name).toUpperCase();
+        if (upper.startsWith('U')) return 'U-Bahn';
+        if (upper.startsWith('S')) return 'S-Bahn';
+        if (upper.includes('TRAM')) return 'Tram';
+        // Simple heuristic: low numbers often tram, else bus
+        const num = parseInt(upper.replace(/\\D/g, ''), 10);
+        if (!isNaN(num) && num > 0 && num <= 30) return 'Tram';
+        return 'Bus';
+    }
+
     async function openStopPopup(stop, marker) {
         try {
             const res = await fetch(`/api/stops/${encodeURIComponent(stop.stop_id)}`);
@@ -331,17 +343,19 @@ document.addEventListener('DOMContentLoaded', () => {
             const departures = data.departures || [];
             const grouped = departures.reduce((acc, d) => {
                 const key = d.route_short_name || 'Route';
-                if (!acc[key]) acc[key] = { times: [], trip_id: d.trip_id };
+                const mode = guessModeFromRouteName(key);
+                if (!acc[key]) acc[key] = { times: [], trip_id: d.trip_id, mode };
                 const mins = minutesUntil(d.departure_time);
                 acc[key].times.push({ raw: d.departure_time || '', mins });
                 if (!acc[key].trip_id && d.trip_id) acc[key].trip_id = d.trip_id;
+                if (!acc[key].mode) acc[key].mode = mode;
                 return acc;
             }, {});
 
             const departuresHtml = Object.keys(grouped).length
                 ? Object.entries(grouped).map(([route, payload]) => `
                     <div class="stop-popup__departure-group">
-                        <button class="route-link" data-route="${route}" data-trip="${payload.trip_id || ''}">${route}</button>
+                        <button class="route-link route-link--${(payload.mode || 'bus').toLowerCase().replace(/\\s+/g,'-')}" data-route="${route}" data-trip="${payload.trip_id || ''}">${route}</button>
                         <div class="stop-popup__times">${
                             payload.times
                                 .sort((a, b) => (a.mins ?? 1e9) - (b.mins ?? 1e9))
