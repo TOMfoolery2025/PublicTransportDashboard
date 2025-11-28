@@ -12,41 +12,31 @@ from geopy.distance import geodesic
 
 
 DEPARTURES_API_BASE = os.getenv("DEPARTURES_API_BASE", "https://civiguild.com/api/departures")
-# If your data snapshot is a couple of days old, shift queries back so the API
-# returns departures relative to that date.
-DEPARTURES_DAYS_AGO = int(os.getenv("DEPARTURES_DAYS_AGO", "2"))
+# Optional offset when using older snapshots
+DEPARTURES_DAYS_AGO = int(os.getenv("DEPARTURES_DAYS_AGO", "0"))
 
 
-def fetch_departures(stop_id: str, limit: int = 5) -> List[Dict[str, Any]]:
+def fetch_departures(stop_id: str, limit: int = 10) -> List[Dict[str, Any]]:
     url = f"{DEPARTURES_API_BASE}/{stop_id}"
-    attempts = []
-    # First try with the time-shifted day (helps when data is frozen a few days back)
-    primary_params = {}
+    params = {}
     if DEPARTURES_DAYS_AGO > 0:
-        primary_params["days_ago"] = DEPARTURES_DAYS_AGO
-    attempts.append(primary_params)
-    # Fallback: try without params to at least show something
-    attempts.append({})
-
-    for params in attempts:
-        try:
-            res = requests.get(url, params=params, timeout=5)
-            res.raise_for_status()
-            data = res.json() or []
-            if not data:
-                continue
-            departures = []
-            for item in data[:limit]:
-                departures.append({
-                    "route_short_name": item.get("route_short_name"),
-                    "departure_time": item.get("departure_time"),
-                    "trip_id": item.get("trip_id"),
-                })
-            if departures:
-                return departures
-        except Exception:
-            continue
-    return []
+        params["days_ago"] = DEPARTURES_DAYS_AGO
+    try:
+        res = requests.get(url, params=params, timeout=8)
+        res.raise_for_status()
+        data = res.json() or []
+        departures = []
+        for item in data[:limit]:
+            departures.append({
+                "route_short_name": item.get("route_short_name"),
+                "trip_id": item.get("trip_id"),
+                "departure_timestamp": item.get("departure_timestamp"),
+                "delay": item.get("delay", 0),
+            })
+        return departures
+    except Exception as exc:
+        print(f"Departures fetch failed for stop {stop_id}: {exc}")
+        return []
 
 
 def register_bus_stop_widget(app, stops_cache):
@@ -78,16 +68,19 @@ def register_bus_stop_widget(app, stops_cache):
         except Exception:
             pass
 
-        departures = fetch_departures(stop_id)
-
+        # Minimal info; departures handled client-side.
         payload = {
             "stop_id": str(stop.get("stop_id")),
             "stop_name": stop.get("stop_name"),
             "lat": lat,
             "lon": lon,
             "distance_from_center_m": distance_from_center,
-            "departures": departures,
         }
         return jsonify(payload)
+
+    @bp.route("/api/departures/<stop_id>")
+    def departures_proxy(stop_id):
+        data = fetch_departures(stop_id)
+        return jsonify(data)
 
     app.register_blueprint(bp)

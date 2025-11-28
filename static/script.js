@@ -466,11 +466,24 @@ document.addEventListener('DOMContentLoaded', () => {
         return Math.round(diffMs / 60000);
     }
 
+    function minutesUntilTimestamp(ts, delay = 0) {
+        if (!ts) return null;
+        const targetMs = (Number(ts) + Number(delay || 0)) * 1000;
+        let diffMs = targetMs - Date.now();
+        return Math.round(diffMs / 60000);
+    }
+
     function formatMinutes(mins) {
         if (mins == null) return '';
         if (mins < 1) return 'now';
         if (mins < 90) return `${mins} min`;
         return `${(mins / 60).toFixed(1)} h`;
+    }
+
+    function formatTimeFromTimestamp(ts, delay = 0) {
+        if (!ts) return '';
+        const d = new Date((Number(ts) + Number(delay || 0)) * 1000);
+        return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     }
 
     function guessModeFromRouteName(name) {
@@ -518,59 +531,59 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function openStopPopup(stop, marker) {
+        const stopName = stop.stop_name || stop.name || 'Stop';
+        const stopId = stop.stop_id || stop.id;
+        let departures = [];
+
         try {
-            const res = await fetch(`/api/stops/${encodeURIComponent(stop.stop_id)}`);
-            const data = await res.json();
-            if (data.error) throw new Error(data.error);
-
-            const distance = data.distance_from_center_m != null
-                ? `${(data.distance_from_center_m / 1000).toFixed(2)} km from city center`
-                : '';
-
-            const departures = data.departures || [];
-            const grouped = departures.reduce((acc, d) => {
-                const key = d.route_short_name || 'Route';
-                const mode = guessModeFromRouteName(key);
-                if (!acc[key]) acc[key] = { times: [], trip_id: d.trip_id, mode };
-                const mins = minutesUntil(d.departure_time);
-                acc[key].times.push({ raw: d.departure_time || '', mins });
-                if (!acc[key].trip_id && d.trip_id) acc[key].trip_id = d.trip_id;
-                if (!acc[key].mode) acc[key].mode = mode;
-                return acc;
-            }, {});
-
-            const departuresHtml = Object.keys(grouped).length
-                ? Object.entries(grouped).map(([route, payload]) => `
-                    <div class="stop-popup__departure-group">
-                        <button class="route-link route-link--${(payload.mode || 'bus').toLowerCase().replace(/\\s+/g,'-')}" data-route="${route}" data-trip="${payload.trip_id || ''}">${route}</button>
-                        <div class="stop-popup__times">${
-                            payload.times
-                                .sort((a, b) => (a.mins ?? 1e9) - (b.mins ?? 1e9))
-                                .slice(0, 3)
-                                .map((t, idx) => {
-                                    const label = formatMinutes(t.mins) || t.raw;
-                                    const cls = idx === 0 ? 'time-pill time-pill--highlight' : 'time-pill';
-                                    return `<span class="${cls}">${label}</span>`;
-                                }).join('')
-                        }</div>
-                    </div>
-                `).join('')
-                : '<div class="stop-popup__meta">No upcoming departures</div>';
-
-            const html = `
-                <div class="stop-popup">
-                    <div class="stop-popup__name">${data.stop_name || 'Stop'}</div>
-                    <div class="stop-popup__section">
-                        <div class="stop-popup__section-title">Upcoming departures:</div>
-                        ${departuresHtml}
-                    </div>
-                </div>
-            `;
-            marker.bindPopup(html, { closeButton: true }).openPopup();
+            const depRes = await fetch(`/api/departures/${encodeURIComponent(stopId)}`);
+            if (depRes.ok) {
+                const depData = await depRes.json();
+                departures = Array.isArray(depData) ? depData : [];
+            }
         } catch (err) {
-            console.warn('Failed to load stop info', err);
-            marker.bindPopup('<div class="stop-popup">Stop info unavailable</div>').openPopup();
+            console.warn('Departures fetch failed', err);
         }
+
+        const grouped = departures.reduce((acc, d) => {
+            const key = d.route_short_name || 'Route';
+            const mode = guessModeFromRouteName(key);
+            if (!acc[key]) acc[key] = { times: [], trip_id: d.trip_id, mode };
+            const mins = minutesUntilTimestamp(d.departure_timestamp, d.delay || 0);
+            acc[key].times.push({ mins });
+            if (!acc[key].trip_id && d.trip_id) acc[key].trip_id = d.trip_id;
+            if (!acc[key].mode) acc[key].mode = mode;
+            return acc;
+        }, {});
+
+        const departuresHtml = Object.keys(grouped).length
+            ? Object.entries(grouped).map(([route, payload]) => `
+                <div class="stop-popup__departure-group">
+                    <button class="route-link route-link--${(payload.mode || 'bus').toLowerCase().replace(/\\s+/g,'-')}" data-route="${route}" data-trip="${payload.trip_id || ''}">${route}</button>
+                    <div class="stop-popup__times">${
+                        payload.times
+                            .sort((a, b) => (a.mins ?? 1e9) - (b.mins ?? 1e9))
+                            .slice(0, 3)
+                                .map((t, idx) => {
+                                    const text = formatMinutes(t.mins);
+                                    const cls = idx === 0 ? 'time-pill time-pill--highlight' : 'time-pill';
+                                    return `<span class="${cls}">${text}</span>`;
+                                }).join('')
+                    }</div>
+                </div>
+            `).join('')
+            : '<div class="stop-popup__meta">Departures unavailable</div>';
+
+        const html = `
+            <div class="stop-popup">
+                <div class="stop-popup__name">${stopName}</div>
+                <div class="stop-popup__section">
+                    <div class="stop-popup__section-title">Upcoming departures:</div>
+                    ${departuresHtml}
+                </div>
+            </div>
+        `;
+        marker.bindPopup(html, { closeButton: true }).openPopup();
     }
 
     async function drawRouteByName(routeName) {
