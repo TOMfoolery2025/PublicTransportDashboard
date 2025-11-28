@@ -281,6 +281,41 @@ def get_network():
     })
 
 
+@app.route('/api/route/<route_name>')
+def get_route_by_name(route_name):
+    """
+    Return edges for a given route name so the frontend can display its shape.
+    We return simple segments between stops that share the same route_name.
+    """
+    query = """
+    MATCH (a:Stop)-[r:TRANSIT_ROUTE {route_name: $route_name}]-(b:Stop)
+    RETURN DISTINCT a.stop_id AS from_id, a.lat AS from_lat, a.lon AS from_lon,
+                    b.stop_id AS to_id, b.lat AS to_lat, b.lon AS to_lon
+    """
+    try:
+        with driver.session() as session:
+            result = session.run(query, route_name=route_name)
+            segments = []
+            for record in result:
+                segments.append({
+                    "from": {
+                        "id": record["from_id"],
+                        "lat": record["from_lat"],
+                        "lon": record["from_lon"]
+                    },
+                    "to": {
+                        "id": record["to_id"],
+                        "lat": record["to_lat"],
+                        "lon": record["to_lon"]
+                    }
+                })
+        if not segments:
+            return jsonify({"segments": [], "route_name": route_name, "message": "No segments found"}), 404
+        return jsonify({"segments": segments, "route_name": route_name})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 
 if __name__ == '__main__':
     app.run(debug=True)

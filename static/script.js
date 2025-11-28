@@ -60,6 +60,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let activeLayers = [];
     let currentHoverTooltip = null;
+    let activeRouteLayer = null;
 
     const setStatus = (msg, type) => {
         statusEl.textContent = msg;
@@ -302,9 +303,23 @@ document.addEventListener('DOMContentLoaded', () => {
                 ? `${(data.distance_from_center_m / 1000).toFixed(2)} km from city center`
                 : '';
 
-            const departures = (data.departures || []).slice(0, 5);
-            const departuresHtml = departures.length
-                ? departures.map(d => `<div class="stop-popup__departure"><span>${d.route_short_name || ''}</span><strong>${d.departure_time || ''}</strong></div>`).join('')
+            const departures = data.departures || [];
+            const grouped = departures.reduce((acc, d) => {
+                const key = d.route_short_name || 'Route';
+                if (!acc[key]) acc[key] = [];
+                if (acc[key].length < 3) {
+                    acc[key].push(d.departure_time || '');
+                }
+                return acc;
+            }, {});
+
+            const departuresHtml = Object.keys(grouped).length
+                ? Object.entries(grouped).map(([route, times]) => `
+                    <div class="stop-popup__departure-group">
+                        <button class="route-link" data-route="${route}">${route}</button>
+                        <div class="stop-popup__times">${times.map(t => `<span>${t}</span>`).join('')}</div>
+                    </div>
+                `).join('')
                 : '<div class="stop-popup__meta">No upcoming departures</div>';
 
             const html = `
@@ -325,6 +340,56 @@ document.addEventListener('DOMContentLoaded', () => {
             marker.bindPopup('<div class="stop-popup">Stop info unavailable</div>').openPopup();
         }
     }
+
+    async function drawRouteByName(routeName) {
+        try {
+            if (activeRouteLayer) {
+                map.removeLayer(activeRouteLayer);
+                activeRouteLayer = null;
+            }
+            const res = await fetch(`/api/route/${encodeURIComponent(routeName)}`);
+            const data = await res.json();
+            if (!res.ok || !data.segments || !data.segments.length) {
+                setStatus(`No geometry for route ${routeName}`, 'error');
+                return;
+            }
+            const polylines = data.segments.map(seg => {
+                return [[seg.from.lat, seg.from.lon], [seg.to.lat, seg.to.lon]];
+            });
+            activeRouteLayer = L.layerGroup();
+            polylines.forEach(coords => {
+                L.polyline(coords, {
+                    color: '#7bd7ff',
+                    weight: 4,
+                    opacity: 0.8
+                }).addTo(activeRouteLayer);
+            });
+            activeRouteLayer.addTo(map);
+            const allPts = polylines.flat();
+            if (allPts.length) {
+                map.fitBounds(allPts, { padding: [40, 40] });
+            }
+            setStatus(`Showing route ${routeName}`, 'success');
+        } catch (err) {
+            console.warn('Failed to draw route', err);
+            setStatus(`Failed to draw route ${routeName}`, 'error');
+        }
+    }
+
+    map.on('popupopen', (e) => {
+        const popupEl = e.popup.getElement();
+        if (!popupEl) return;
+        const links = popupEl.querySelectorAll('.route-link');
+        links.forEach(link => {
+            link.addEventListener('click', (evt) => {
+                evt.preventDefault();
+                const routeName = link.dataset.route;
+                if (routeName) {
+                    drawRouteByName(routeName);
+                }
+            });
+        });
+    });
 
     startPinBtn.addEventListener('click', () => {
         mapPinMode = 'start';
