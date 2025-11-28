@@ -530,34 +530,60 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    // --- REPLACED: Full logic for popup with external API & distance calc ---
     async function openStopPopup(stop, marker) {
         let refreshInterval = null;
+        const CITY_CENTER = [48.1351, 11.5820];
 
         const updatePopupContent = async () => {
-            const stopName = stop.stop_name || stop.name || 'Stop';
             const stopId = stop.stop_id || stop.id;
+            let stopData = {
+                name: stop.stop_name || stop.name || 'Stop',
+                lat: stop.lat || stop.stop_lat,
+                lon: stop.lon || stop.stop_lon,
+                distance: null
+            };
             let departures = [];
 
             try {
-                // Fetch via CORS Proxy
-                const targetUrl = `https://civiguild.com/api/departures/${encodeURIComponent(stopId)}`;
-                const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
+                // Prepare URLs with CORS proxy
+                const stopUrl = `https://civiguild.com/api/stops/${encodeURIComponent(stopId)}`;
+                const stopProxy = `https://corsproxy.io/?${encodeURIComponent(stopUrl)}`;
+                const depUrl = `https://civiguild.com/api/departures/${encodeURIComponent(stopId)}`;
+                const depProxy = `https://corsproxy.io/?${encodeURIComponent(depUrl)}`;
 
-                const depRes = await fetch(proxyUrl);
+                const [stopRes, depRes] = await Promise.all([
+                    fetch(stopProxy),
+                    fetch(depProxy)
+                ]);
+
+                if (stopRes.ok) {
+                    const sData = await stopRes.json();
+                    if (sData) {
+                        stopData.name = sData.stop_name || stopData.name;
+                        stopData.lat = sData.lat || sData.stop_lat || stopData.lat;
+                        stopData.lon = sData.lon || sData.stop_lon || stopData.lon;
+                    }
+                }
+
+                if (stopData.lat && stopData.lon) {
+                    const distMeters = calculateDistance([stopData.lat, stopData.lon], CITY_CENTER);
+                    stopData.distance = distMeters;
+                }
 
                 if (depRes.ok) {
-                    const rawData = await depRes.json();
-                    if (Array.isArray(rawData)) {
-                        departures = rawData.slice(0, 10).map(item => ({
+                    const depData = await depRes.json();
+                    if (Array.isArray(depData)) {
+                        departures = depData.slice(0, 10).map(item => ({
                             route_short_name: item.route_short_name,
                             trip_id: item.trip_id,
                             departure_timestamp: item.departure_timestamp,
-                            delay: item.delay || 0 // Store the delay
+                            delay: item.delay || 0
                         }));
                     }
                 }
             } catch (err) {
-                console.warn('Departures fetch failed', err);
+                console.warn('API fetch failed', err);
             }
 
             const grouped = departures.reduce((acc, d) => {
@@ -565,10 +591,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const mode = guessModeFromRouteName(key);
                 if (!acc[key]) acc[key] = { times: [], trip_id: d.trip_id, mode };
 
-                // Calculate ETA (Your helper function already adds the delay to the timestamp)
                 const mins = minutesUntilTimestamp(d.departure_timestamp, d.delay || 0);
-
-                // Store BOTH minutes and the delay value for styling
                 acc[key].times.push({ mins, delay: d.delay });
 
                 if (!acc[key].trip_id && d.trip_id) acc[key].trip_id = d.trip_id;
@@ -588,18 +611,10 @@ document.addEventListener('DOMContentLoaded', () => {
                                     const text = formatMinutes(t.mins);
                                     let cls = 'time-pill';
                                     let style = '';
-
-                                    // Highlight the very first departure usually
                                     if (idx === 0) cls += ' time-pill--highlight';
-
-                                    // RED COLOR LOGIC: If delay exists and is positive
                                     if (t.delay && t.delay > 0) {
-                                        // Overwrite styling to red
                                         style = 'style="background-color: #d32f2f; color: #fff; border-color: #b71c1c;"';
-                                        // Optional: Add a subtle '+' indicator to text? e.g. "+ 2 min"
-                                        // text = formatMinutes(t.mins); // keeping strictly to your request just to change color
                                     }
-
                                     return `<span class="${cls}" ${style}>${text}</span>`;
                                 }).join('')
                         }</div>
@@ -607,9 +622,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 `).join('')
                 : '<div class="stop-popup__meta">Departures unavailable</div>';
 
+            const distanceHtml = stopData.distance
+                ? `<div style="font-size: 0.85em; color: #666; margin-bottom: 8px;">
+                     ${formatDistance(stopData.distance)} from city center
+                   </div>`
+                : '';
+
             const html = `
                 <div class="stop-popup">
-                    <div class="stop-popup__name">${stopName}</div>
+                    <div class="stop-popup__name">${stopData.name}</div>
+                    ${distanceHtml}
                     <div class="stop-popup__section">
                         <div class="stop-popup__section-title">Upcoming departures (Live):</div>
                         ${departuresHtml}
