@@ -281,6 +281,34 @@ def get_network():
     })
 
 
+@app.route('/api/trip_stops/<trip_id>')
+def get_trip_stops(trip_id):
+    """
+    Fetch ordered stops for a given trip_id from the external API.
+    """
+    url = f"https://civiguild.com/api/trips/allStops/{trip_id}"
+    try:
+        res = requests.get(url, timeout=5)
+        res.raise_for_status()
+        data = res.json() or []
+        stops = sorted(data, key=lambda s: s.get("sequence", 0))
+        formatted = [
+            {
+                "sequence": s.get("sequence"),
+                "stop_id": s.get("stop_id"),
+                "stop_name": s.get("stop_name"),
+                "lat": s.get("stop_lat"),
+                "lon": s.get("stop_lon"),
+            }
+            for s in stops
+        ]
+        if not formatted:
+            return jsonify({"stops": [], "message": "No stops found"}), 404
+        return jsonify({"stops": formatted})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route('/api/route/<route_name>')
 def get_route_by_name(route_name):
     """

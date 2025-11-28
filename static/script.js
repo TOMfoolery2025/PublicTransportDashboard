@@ -306,18 +306,20 @@ document.addEventListener('DOMContentLoaded', () => {
             const departures = data.departures || [];
             const grouped = departures.reduce((acc, d) => {
                 const key = d.route_short_name || 'Route';
-                if (!acc[key]) acc[key] = [];
-                if (acc[key].length < 3) {
-                    acc[key].push(d.departure_time || '');
+                if (!acc[key]) acc[key] = { times: [], trip_id: d.trip_id };
+                if (acc[key].times.length < 3) {
+                    acc[key].times.push(d.departure_time || '');
                 }
+                // Prefer the first seen trip_id if missing
+                if (!acc[key].trip_id && d.trip_id) acc[key].trip_id = d.trip_id;
                 return acc;
             }, {});
 
             const departuresHtml = Object.keys(grouped).length
-                ? Object.entries(grouped).map(([route, times]) => `
+                ? Object.entries(grouped).map(([route, payload]) => `
                     <div class="stop-popup__departure-group">
-                        <button class="route-link" data-route="${route}">${route}</button>
-                        <div class="stop-popup__times">${times.map(t => `<span>${t}</span>`).join('')}</div>
+                        <button class="route-link" data-route="${route}" data-trip="${payload.trip_id || ''}">${route}</button>
+                        <div class="stop-popup__times">${payload.times.map(t => `<span>${t}</span>`).join('')}</div>
                     </div>
                 `).join('')
                 : '<div class="stop-popup__meta">No upcoming departures</div>';
@@ -359,9 +361,9 @@ document.addEventListener('DOMContentLoaded', () => {
             activeRouteLayer = L.layerGroup();
             polylines.forEach(coords => {
                 L.polyline(coords, {
-                    color: '#7bd7ff',
+                    color: '#e53935',
                     weight: 4,
-                    opacity: 0.8
+                    opacity: 0.9
                 }).addTo(activeRouteLayer);
             });
             activeRouteLayer.addTo(map);
@@ -376,6 +378,39 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    async function drawTripRoute(tripId, routeName) {
+        try {
+            if (activeRouteLayer) {
+                map.removeLayer(activeRouteLayer);
+                activeRouteLayer = null;
+            }
+            const res = await fetch(`/api/trip_stops/${encodeURIComponent(tripId)}`);
+            const data = await res.json();
+            if (!res.ok || !data.stops || !data.stops.length) {
+                // fallback to route name if trip fails
+                if (routeName) {
+                    await drawRouteByName(routeName);
+                } else {
+                    setStatus(`No stops found for trip ${tripId}`, 'error');
+                }
+                return;
+            }
+            const coords = data.stops.map(s => [s.lat, s.lon]);
+            activeRouteLayer = L.polyline(coords, {
+                color: '#e53935',
+                weight: 5,
+                opacity: 0.9
+            }).addTo(map);
+            if (coords.length) {
+                map.fitBounds(coords, { padding: [40, 40] });
+            }
+            setStatus(`Showing trip ${tripId}${routeName ? ` (${routeName})` : ''}`, 'success');
+        } catch (err) {
+            console.warn('Failed to draw trip', err);
+            setStatus(`Failed to draw trip ${tripId}`, 'error');
+        }
+    }
+
     map.on('popupopen', (e) => {
         const popupEl = e.popup.getElement();
         if (!popupEl) return;
@@ -384,7 +419,10 @@ document.addEventListener('DOMContentLoaded', () => {
             link.addEventListener('click', (evt) => {
                 evt.preventDefault();
                 const routeName = link.dataset.route;
-                if (routeName) {
+                const tripId = link.dataset.trip;
+                if (tripId) {
+                    drawTripRoute(tripId, routeName);
+                } else if (routeName) {
                     drawRouteByName(routeName);
                 }
             });

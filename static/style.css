@@ -378,17 +378,17 @@ body {
 
 .route-link {
     border: none;
-    background: rgba(123, 215, 255, 0.15);
-    color: #0b1020;
+    background: rgba(229, 57, 53, 0.15);
+    color: #e53935;
     padding: 4px 8px;
     border-radius: 8px;
     font-weight: 700;
     cursor: pointer;
-    box-shadow: inset 0 0 0 1px rgba(123,215,255,0.25);
+    box-shadow: inset 0 0 0 1px rgba(229,57,53,0.25);
 }
 
 .route-link:hover {
-    background: rgba(123, 215, 255, 0.25);
+    background: rgba(229, 57, 53, 0.25);
 }
 
 .stop-popup__departure-group {
