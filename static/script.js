@@ -10,10 +10,19 @@ document.addEventListener('DOMContentLoaded', () => {
     const routeSummary = document.getElementById('route-summary');
     const findPathBtn = document.getElementById('find-path-btn');
 
-    const map = L.map('map', { zoomControl: true, preferCanvas: true }).setView(window.DEFAULT_CENTER || [48.1351, 11.5820], 12);
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-        attribution: '&copy; OpenStreetMap'
-    }).addTo(map);
+    const baseLayers = {
+        "Light": L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+            attribution: '&copy; OpenStreetMap'
+        }),
+        "Dark": L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+            attribution: '&copy; OpenStreetMap'
+        }),
+        "OSM": L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; OpenStreetMap contributors'
+        })
+    };
+    const map = L.map('map', { zoomControl: true, preferCanvas: true, layers: [baseLayers["Light"]] }).setView(window.DEFAULT_CENTER || [48.1351, 11.5820], 12);
+    L.control.layers(baseLayers, {}, { position: 'bottomright', collapsed: false }).addTo(map);
 
     // Store selected stops/locations
     let selectedStart = null;
