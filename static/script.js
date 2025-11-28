@@ -72,19 +72,41 @@ document.addEventListener('DOMContentLoaded', () => {
             }));
     }
 
+    const MUNICH_BOUNDS = {
+        west: 10.7,
+        east: 12.3,
+        north: 48.6,
+        south: 47.8
+    };
+
+    function isWithinMunich(lat, lon) {
+        return (
+            lat <= MUNICH_BOUNDS.north &&
+            lat >= MUNICH_BOUNDS.south &&
+            lon >= MUNICH_BOUNDS.west &&
+            lon <= MUNICH_BOUNDS.east
+        );
+    }
+
     async function geocodePlaces(query, maxResults = 5) {
         if (!query || query.length < 3) return [];
         try {
-            const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=${maxResults}&q=${encodeURIComponent(query)}`;
+            const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=${maxResults}&countrycodes=de&bounded=1&viewbox=${MUNICH_BOUNDS.west},${MUNICH_BOUNDS.north},${MUNICH_BOUNDS.east},${MUNICH_BOUNDS.south}&q=${encodeURIComponent(query)}`;
             const res = await fetch(url, { headers: { 'Accept-Language': 'en' } });
             const data = await res.json();
-            return (data || []).map(place => ({
-                label: place.display_name,
-                subtitle: place.type ? place.type.replace(/_/g, ' ') : 'Address',
-                lat: parseFloat(place.lat),
-                lon: parseFloat(place.lon),
-                source: 'address'
-            }));
+            return (data || [])
+                .filter(place => {
+                    const lat = parseFloat(place.lat);
+                    const lon = parseFloat(place.lon);
+                    return isWithinMunich(lat, lon);
+                })
+                .map(place => ({
+                    label: place.display_name,
+                    subtitle: place.type ? place.type.replace(/_/g, ' ') : 'Address',
+                    lat: parseFloat(place.lat),
+                    lon: parseFloat(place.lon),
+                    source: 'address'
+                }));
         } catch (e) {
             console.warn('Geocoding failed', e);
             return [];
