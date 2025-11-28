@@ -143,6 +143,36 @@ document.addEventListener('DOMContentLoaded', () => {
         return coordinates;
     }
 
+    // Format distance for display
+    function formatDistance(meters) {
+        if (meters < 1000) {
+            return Math.round(meters) + ' m';
+        } else {
+            return (meters / 1000).toFixed(1) + ' km';
+        }
+    }
+
+    // Calculate distance of a polyline in meters
+    function calculatePolylineDistance(latLngs) {
+        let totalDistance = 0;
+        for (let i = 1; i < latLngs.length; i++) {
+            const prev = latLngs[i-1];
+            const curr = latLngs[i];
+            
+            // Haversine formula for distance calculation
+            const R = 6371000; // Earth's radius in meters
+            const dLat = (curr[0] - prev[0]) * Math.PI / 180;
+            const dLon = (curr[1] - prev[1]) * Math.PI / 180;
+            const a = 
+                Math.sin(dLat/2) * Math.sin(dLat/2) +
+                Math.cos(prev[0] * Math.PI / 180) * Math.cos(curr[0] * Math.PI / 180) * 
+                Math.sin(dLon/2) * Math.sin(dLon/2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+            totalDistance += R * c;
+        }
+        return totalDistance;
+    }
+
     const MODE_COLORS = {
         'U-Bahn': '#0065AE',
         'S-Bahn': '#4EBE3F',
@@ -159,31 +189,111 @@ document.addEventListener('DOMContentLoaded', () => {
         if (leg.mode.includes("Bus")) color = MODE_COLORS['Bus'];
         if (leg.mode.includes("Tram")) color = MODE_COLORS['Tram'];
 
+        let line = null;
+        let distance = 0;
+        let routeGeometry = [];
+
+        // 1. Walking: Use OSRM walking profile for realistic pedestrian routes
         if (leg.mode === 'WALK') {
-            const line = L.polyline(latLngs, {
-                color: '#666', weight: 5, dashArray: '5, 12', opacity: 0.8
-            });
-            return [line, points[0]];
-        }
+            try {
+                const osrmCoords = points.map(p => `${p.lon},${p.lat}`).join(';');
+                // Use 'walking' profile instead of 'driving' for pedestrian routes
+                const url = `https://router.project-osrm.org/route/v1/walking/${osrmCoords}?overview=full&geometries=polyline`;
+                
+                const res = await fetch(url);
+                const data = await res.json();
 
-        try {
-            const osrmCoords = points.map(p => `${p.lon},${p.lat}`).join(';');
-            const url = `https://router.project-osrm.org/route/v1/driving/${osrmCoords}?overview=full`;
-
-            const res = await fetch(url);
-            const data = await res.json();
-
-            if(data.routes && data.routes.length > 0) {
-                 const decoded = decodePolyline(data.routes[0].geometry, 5);
-                 const line = L.polyline(decoded, { color: color, weight: 6, opacity: 0.9 });
-                 return [line, points[0]];
+                if(data.routes && data.routes.length > 0) {
+                    routeGeometry = decodePolyline(data.routes[0].geometry, 5);
+                    distance = data.routes[0].distance; // Distance in meters from OSRM
+                    line = L.polyline(routeGeometry, {
+                        color: '#666', 
+                        weight: 5, 
+                        dashArray: '5, 12', 
+                        opacity: 0.8,
+                        className: 'walking-route'
+                    });
+                }
+            } catch(e) {
+                console.warn("OSRM walking failed, using straight line", e);
+                // Fallback to straight line if OSRM fails
+                routeGeometry = latLngs;
+                distance = calculatePolylineDistance(latLngs);
+                line = L.polyline(latLngs, {
+                    color: '#666', 
+                    weight: 5, 
+                    dashArray: '5, 12', 
+                    opacity: 0.8,
+                    className: 'walking-route'
+                });
             }
-        } catch(e) {
-            console.warn("OSRM failed, using straight line");
+        } 
+        // 2. Transit: Use OSRM driving profile for vehicles
+        else {
+            try {
+                const osrmCoords = points.map(p => `${p.lon},${p.lat}`).join(';');
+                const url = `https://router.project-osrm.org/route/v1/driving/${osrmCoords}?overview=full&geometries=polyline`;
+
+                const res = await fetch(url);
+                const data = await res.json();
+
+                if(data.routes && data.routes.length > 0) {
+                    routeGeometry = decodePolyline(data.routes[0].geometry, 5);
+                    distance = data.routes[0].distance;
+                    line = L.polyline(routeGeometry, { 
+                        color: color, 
+                        weight: 6, 
+                        opacity: 0.9,
+                        className: 'transit-route'
+                    });
+                }
+            } catch(e) {
+                console.warn("OSRM driving failed, using straight line", e);
+                routeGeometry = latLngs;
+                distance = calculatePolylineDistance(latLngs);
+                line = L.polyline(latLngs, { 
+                    color: color, 
+                    weight: 6, 
+                    opacity: 0.9,
+                    className: 'transit-route'
+                });
+            }
         }
 
-        const line = L.polyline(latLngs, { color: color, weight: 6, opacity: 0.9 });
-        return [line, points[0]];
+        // Create distance label
+        let label = null;
+        if (routeGeometry.length > 0) {
+            // Find midpoint for label placement
+            const midIndex = Math.floor(routeGeometry.length / 2);
+            const midpoint = routeGeometry[midIndex];
+            
+            let labelText = '';
+            if (leg.mode === 'WALK') {
+                labelText = `Walk: ${formatDistance(distance)}`;
+            } else {
+                labelText = `${leg.route || leg.mode}: ${formatDistance(distance)}`;
+            }
+
+            // Create a custom div icon for the label
+            label = L.marker(midpoint, {
+                icon: L.divIcon({
+                    className: 'route-label',
+                    html: `<div class="route-label-inner">${labelText}</div>`,
+                    iconSize: [120, 30],
+                    iconAnchor: [60, 15]
+                }),
+                interactive: false
+            });
+        }
+
+        return {
+            line: line,
+            startPoint: points[0],
+            label: label,
+            distance: distance,
+            mode: leg.mode,
+            route: leg.route
+        };
     };
 
     const handleRoute = async () => {
@@ -210,30 +320,62 @@ document.addEventListener('DOMContentLoaded', () => {
                 const promises = data.legs.map(leg => prepareLegLayer(leg));
                 const results = await Promise.all(promises);
 
-                results.forEach(([layer, startPoint], index) => {
-                    layer.addTo(map);
-                    activeLayers.push(layer);
+                // Calculate total distance
+                const totalDistance = results.reduce((sum, result) => sum + result.distance, 0);
+                
+                results.forEach((result, index) => {
+                    // Add the route line
+                    result.line.addTo(map);
+                    activeLayers.push(result.line);
 
-                    const marker = L.circleMarker([startPoint.lat, startPoint.lon], {
-                        radius: 4, color: '#000', fillColor: '#fff', fillOpacity: 1
-                    }).addTo(map).bindTooltip(data.legs[index].mode);
-                    activeLayers.push(marker);
+                    // Add the distance label
+                    if (result.label) {
+                        result.label.addTo(map);
+                        activeLayers.push(result.label);
+                    }
+
+                    // Add transition markers (only for transit modes)
+                    if (result.mode !== 'WALK') {
+                        const marker = L.circleMarker([result.startPoint.lat, result.startPoint.lon], {
+                            radius: 4, 
+                            color: '#000', 
+                            fillColor: '#fff', 
+                            fillOpacity: 1
+                        }).addTo(map).bindTooltip(result.mode);
+                        activeLayers.push(marker);
+                    }
                 });
 
-                const lastLeg = data.legs[data.legs.length-1];
-                const lastPt = lastLeg.points[lastLeg.points.length-1];
-                L.circleMarker([lastPt.lat, lastPt.lon], {
-                    radius: 6, color: '#000', fillColor: '#000', fillOpacity: 1
-                }).addTo(map).bindTooltip("End");
+                // Add start and end markers
+                const startMarker = L.circleMarker([selectedStart.lat, selectedStart.lon], {
+                    radius: 6, 
+                    color: '#000', 
+                    fillColor: '#4CAF50', 
+                    fillOpacity: 1
+                }).addTo(map).bindTooltip("Start: " + selectedStart.stop_name);
+                activeLayers.push(startMarker);
 
-                setStatus(`Route found!`, 'success');
+                const endMarker = L.circleMarker([selectedEnd.lat, selectedEnd.lon], {
+                    radius: 6, 
+                    color: '#000', 
+                    fillColor: '#F44336', 
+                    fillOpacity: 1
+                }).addTo(map).bindTooltip("End: " + selectedEnd.stop_name);
+                activeLayers.push(endMarker);
 
+                setStatus(`Route found! Total distance: ${formatDistance(totalDistance)}`, 'success');
+
+                // Fit bounds to show entire route
                 const allPts = data.legs.flatMap(l => l.points.map(p => [p.lat, p.lon]));
                 map.fitBounds(allPts, { padding: [50, 50] });
 
-                routeSummary.innerHTML = data.legs.map(l =>
-                    `<div><strong>${l.mode}</strong> (${l.route || ''}): ${l.points.length-1} stops</div>`
-                ).join('');
+                // Update route summary
+                routeSummary.innerHTML = `
+                    <div><strong>Total Distance:</strong> ${formatDistance(totalDistance)}</div>
+                    ${data.legs.map((leg, index) => 
+                        `<div><strong>${leg.mode}</strong>${leg.route ? ` (${leg.route})` : ''}: ${results[index] ? formatDistance(results[index].distance) : 'calculating...'}</div>`
+                    ).join('')}
+                `;
                 routeSummary.classList.remove('hidden');
             } else if (data.error) {
                 setStatus(data.error, 'error');
