@@ -531,59 +531,131 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function openStopPopup(stop, marker) {
-        const stopName = stop.stop_name || stop.name || 'Stop';
-        const stopId = stop.stop_id || stop.id;
-        let departures = [];
+        let refreshInterval = null;
 
-        try {
-            const depRes = await fetch(`/api/departures/${encodeURIComponent(stopId)}`);
-            if (depRes.ok) {
-                const depData = await depRes.json();
-                departures = Array.isArray(depData) ? depData : [];
+        const updatePopupContent = async () => {
+            const stopName = stop.stop_name || stop.name || 'Stop';
+            const stopId = stop.stop_id || stop.id;
+            let departures = [];
+
+            try {
+                // Fetch via CORS Proxy
+                const targetUrl = `https://civiguild.com/api/departures/${encodeURIComponent(stopId)}`;
+                const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
+
+                const depRes = await fetch(proxyUrl);
+
+                if (depRes.ok) {
+                    const rawData = await depRes.json();
+                    if (Array.isArray(rawData)) {
+                        departures = rawData.slice(0, 10).map(item => ({
+                            route_short_name: item.route_short_name,
+                            trip_id: item.trip_id,
+                            departure_timestamp: item.departure_timestamp,
+                            delay: item.delay || 0 // Store the delay
+                        }));
+                    }
+                }
+            } catch (err) {
+                console.warn('Departures fetch failed', err);
             }
-        } catch (err) {
-            console.warn('Departures fetch failed', err);
-        }
 
-        const grouped = departures.reduce((acc, d) => {
-            const key = d.route_short_name || 'Route';
-            const mode = guessModeFromRouteName(key);
-            if (!acc[key]) acc[key] = { times: [], trip_id: d.trip_id, mode };
-            const mins = minutesUntilTimestamp(d.departure_timestamp, d.delay || 0);
-            acc[key].times.push({ mins });
-            if (!acc[key].trip_id && d.trip_id) acc[key].trip_id = d.trip_id;
-            if (!acc[key].mode) acc[key].mode = mode;
-            return acc;
-        }, {});
+            const grouped = departures.reduce((acc, d) => {
+                const key = d.route_short_name || 'Route';
+                const mode = guessModeFromRouteName(key);
+                if (!acc[key]) acc[key] = { times: [], trip_id: d.trip_id, mode };
 
-        const departuresHtml = Object.keys(grouped).length
-            ? Object.entries(grouped).map(([route, payload]) => `
-                <div class="stop-popup__departure-group">
-                    <button class="route-link route-link--${(payload.mode || 'bus').toLowerCase().replace(/\\s+/g,'-')}" data-route="${route}" data-trip="${payload.trip_id || ''}">${route}</button>
-                    <div class="stop-popup__times">${
-                        payload.times
-                            .sort((a, b) => (a.mins ?? 1e9) - (b.mins ?? 1e9))
-                            .slice(0, 3)
+                // Calculate ETA (Your helper function already adds the delay to the timestamp)
+                const mins = minutesUntilTimestamp(d.departure_timestamp, d.delay || 0);
+
+                // Store BOTH minutes and the delay value for styling
+                acc[key].times.push({ mins, delay: d.delay });
+
+                if (!acc[key].trip_id && d.trip_id) acc[key].trip_id = d.trip_id;
+                if (!acc[key].mode) acc[key].mode = mode;
+                return acc;
+            }, {});
+
+            const departuresHtml = Object.keys(grouped).length
+                ? Object.entries(grouped).map(([route, payload]) => `
+                    <div class="stop-popup__departure-group">
+                        <button class="route-link route-link--${(payload.mode || 'bus').toLowerCase().replace(/\s+/g,'-')}" data-route="${route}" data-trip="${payload.trip_id || ''}">${route}</button>
+                        <div class="stop-popup__times">${
+                            payload.times
+                                .sort((a, b) => (a.mins ?? 1e9) - (b.mins ?? 1e9))
+                                .slice(0, 3)
                                 .map((t, idx) => {
                                     const text = formatMinutes(t.mins);
-                                    const cls = idx === 0 ? 'time-pill time-pill--highlight' : 'time-pill';
-                                    return `<span class="${cls}">${text}</span>`;
-                                }).join('')
-                    }</div>
-                </div>
-            `).join('')
-            : '<div class="stop-popup__meta">Departures unavailable</div>';
+                                    let cls = 'time-pill';
+                                    let style = '';
 
-        const html = `
-            <div class="stop-popup">
-                <div class="stop-popup__name">${stopName}</div>
-                <div class="stop-popup__section">
-                    <div class="stop-popup__section-title">Upcoming departures:</div>
-                    ${departuresHtml}
+                                    // Highlight the very first departure usually
+                                    if (idx === 0) cls += ' time-pill--highlight';
+
+                                    // RED COLOR LOGIC: If delay exists and is positive
+                                    if (t.delay && t.delay > 0) {
+                                        // Overwrite styling to red
+                                        style = 'style="background-color: #d32f2f; color: #fff; border-color: #b71c1c;"';
+                                        // Optional: Add a subtle '+' indicator to text? e.g. "+ 2 min"
+                                        // text = formatMinutes(t.mins); // keeping strictly to your request just to change color
+                                    }
+
+                                    return `<span class="${cls}" ${style}>${text}</span>`;
+                                }).join('')
+                        }</div>
+                    </div>
+                `).join('')
+                : '<div class="stop-popup__meta">Departures unavailable</div>';
+
+            const html = `
+                <div class="stop-popup">
+                    <div class="stop-popup__name">${stopName}</div>
+                    <div class="stop-popup__section">
+                        <div class="stop-popup__section-title">Upcoming departures (Live):</div>
+                        ${departuresHtml}
+                    </div>
                 </div>
-            </div>
-        `;
-        marker.bindPopup(html, { closeButton: true }).openPopup();
+            `;
+
+            if (marker.getPopup()) {
+                marker.setPopupContent(html);
+            } else {
+                marker.bindPopup(html, { closeButton: true }).openPopup();
+            }
+
+            setTimeout(() => {
+                const popupEl = marker.getPopup().getElement();
+                if (popupEl) {
+                    const links = popupEl.querySelectorAll('.route-link');
+                    links.forEach(link => {
+                        link.addEventListener('click', (evt) => {
+                            evt.preventDefault();
+                            const routeName = link.dataset.route;
+                            const tripId = link.dataset.trip;
+                            if (tripId) drawTripRoute(tripId, routeName);
+                            else if (routeName) drawRouteByName(routeName);
+                        });
+                    });
+                }
+            }, 50);
+        };
+
+        await updatePopupContent();
+
+        refreshInterval = setInterval(() => {
+            if (marker.getPopup() && marker.getPopup().isOpen()) {
+                updatePopupContent();
+            } else {
+                clearInterval(refreshInterval);
+            }
+        }, 30000);
+
+        marker.on('popupclose', () => {
+            if (refreshInterval) {
+                clearInterval(refreshInterval);
+                refreshInterval = null;
+            }
+        });
     }
 
     async function drawRouteByName(routeName) {
