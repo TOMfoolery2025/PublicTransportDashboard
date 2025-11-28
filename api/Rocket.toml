@@ -7,5 +7,15 @@ max_connections = 1024
 connect_timeout = 5
 idle_timeout = 120
 
+
 # This option is only supported by the `sqlx_sqlite` driver.
 #extensions = ["memvfs", "rot13"]
+
+[release.databases.transport]
+url = "transport.sqlite"
+
+# Only `url` is required. These have sane defaults and are optional.
+min_connections = 64
+max_connections = 1024
+connect_timeout = 5
+idle_timeout = 120
