@@ -1016,13 +1016,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
                     // Add transition markers (only for transit modes)
                     if (result.mode !== 'WALK') {
-                        const marker = L.circleMarker([result.startPoint.lat, result.startPoint.lon], {
+                        const startMarker = L.circleMarker([result.startPoint.lat, result.startPoint.lon], {
                             radius: 4, 
                             color: '#000', 
                             fillColor: '#fff', 
                             fillOpacity: 1
                         }).addTo(map).bindTooltip(`${result.mode} to ${result.destinationName}`);
-                        activeLayers.push(marker);
+                        activeLayers.push(startMarker);
+
+                        const endPt = result.points[result.points.length - 1];
+                        const endMarker = L.circleMarker([endPt.lat, endPt.lon], {
+                            radius: 4,
+                            color: '#000',
+                            fillColor: '#fff',
+                            fillOpacity: 1
+                        }).addTo(map).bindTooltip(`Arrive: ${result.destinationName}`);
+                        activeLayers.push(endMarker);
                     }
                 });
 
