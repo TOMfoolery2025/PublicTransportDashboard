@@ -233,7 +233,7 @@ document.addEventListener('DOMContentLoaded', () => {
             try {
                 const osrmCoords = points.map(p => `${p.lon},${p.lat}`).join(';');
                 // Use 'walking' profile instead of 'driving' for pedestrian routes
-                const url = `https://router.project-osrm.org/route/v1/walking/${osrmCoords}?overview=full&geometries=polyline`;
+                const url = `https://routing.openstreetmap.de/routed-foot/route/v1/driving/${osrmCoords}?overview=full&geometries=polyline`;
                 
                 const res = await fetch(url);
                 const data = await res.json();
@@ -284,7 +284,7 @@ document.addEventListener('DOMContentLoaded', () => {
         else {
             try {
                 const osrmCoords = points.map(p => `${p.lon},${p.lat}`).join(';');
-                const url = `https://router.project-osrm.org/route/v1/driving/${osrmCoords}?overview=full&geometries=polyline`;
+                const url = `https://routing.openstreetmap.de/routed-car/route/v1/driving/${osrmCoords}?overview=full&geometries=polyline`;
 
                 const res = await fetch(url);
                 const data = await res.json();
