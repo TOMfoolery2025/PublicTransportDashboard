@@ -5,6 +5,7 @@ use gtfs_structures::Agency;
 use neo4rs::{query, Graph};
 use rocket::{Rocket, Build, futures, post, get, delete, Error, Response, response, State};
 use rocket::fairing::{self, AdHoc};
+use rocket::futures::TryFutureExt;
 use rocket::response::status::{Created, NotFound};
 use rocket::serde::{Serialize, Deserialize, json::Json};
 
@@ -61,6 +62,17 @@ pub struct StopDTO {
     stop_lon: f64,
 }
 
+#[derive(Serialize)]
+pub struct FullStopInfoDTO {
+    stop_id: i64,
+    stop_name: String,
+    parent_station: Option<i64>,
+    stop_lat: f64,
+    stop_lon: f64,
+    location_type: Option<String>,
+    platform_code: Option<String>,
+}
+
 #[get("/agency/<id>")]
 pub async fn agency_by_id(mut db: Connection<Transport>, id: i64) -> Result<Json<AgencyDTO>, Status> {
     let query = sqlx::query("SELECT * FROM Agency WHERE agency_id=?")
@@ -76,6 +88,35 @@ pub async fn agency_by_id(mut db: Connection<Transport>, id: i64) -> Result<Json
             lang: row.get::<Option<String>, _>("agency_lang"),
         };
         Ok(Json(agency))
+    } else {
+        Err(Status::NotFound)
+    }
+}
+
+#[get("/stops/<id>")]
+pub async fn get_stop_by_id(mut db: Connection<Transport>, id: i64)
+    -> Result<Json<FullStopInfoDTO>, Status> {
+    let query = sqlx::query(
+        "SELECT stop_id, stop_name, parent_station, stop_lat, stop_lon,
+        location_type, platform_code
+        FROM Stops WHERE stop_id = ?;"
+    )
+        .bind(id)
+        .fetch_one(&mut **db)
+        .await;
+    if let Ok(row) = query {
+        println!("Found stop: {:?}", row.len());
+        let parent_station: Option<i64> = row.try_get("parent_station").unwrap_or(None);
+        let stop_info = FullStopInfoDTO {
+            stop_id: row.get::<i64, _>("stop_id"),
+            stop_name: row.get::<String, _>("stop_name"),
+            parent_station: parent_station,
+            stop_lat: row.get::<f64, _>("stop_lat"),
+            stop_lon: row.get::<f64, _>("stop_lon"),
+            location_type: row.get::<Option<String>, _>("location_type"),
+            platform_code: row.get::<Option<String>, _>("platform_code"),
+        };
+        Ok(Json(stop_info))
     } else {
         Err(Status::NotFound)
     }
