@@ -1,3 +1,4 @@
+import heapq
 import os
 from flask import Flask, render_template, jsonify, request
 from neo4j import GraphDatabase
@@ -19,6 +20,43 @@ STOPS_API_URL = "https://civiguild.com/api/stops"
 
 driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
 
+
+def ensure_gds_graph_exists():
+    graph_name = "munich_transit"
+    try:
+        with driver.session() as session:
+            # 1. Drop the old graph so we can re-project without 'gds_weight'
+            session.run("CALL gds.graph.drop($name, false)", name=graph_name)
+
+            print(f"Projecting GDS Graph '{graph_name}' (Standard Weights)...")
+
+            # 2. Project using standard 'weight' only
+            session.run("""
+                        CALL gds.graph.project(
+                        $name,
+                        'Stop',
+                        {
+                          TRANSIT_ROUTE: {
+                                           type:        'TRANSIT_ROUTE',
+                                           properties:  'weight',
+                                           orientation: 'NATURAL'
+                                         },
+                          WALK:          {
+                                           type:        'WALK',
+                                           properties:  'weight',
+                                           orientation: 'NATURAL'
+                                         }
+                        }
+                        )
+                        """, name=graph_name)
+            print(f"Graph '{graph_name}' projected successfully.")
+
+    except Exception as e:
+        print(f"Warning: Could not project GDS graph. Error: {e}")
+
+
+# Call immediately
+ensure_gds_graph_exists()
 
 # --- CACHE STOPS ---
 # We load these once at startup.
@@ -82,6 +120,129 @@ def find_nearest_stop(lat, lon):
     return closest
 
 
+def build_legs_from_hops(hops):
+    """
+    PASS 1: Basic Merging (Identical adjacent modes)
+    PASS 2: Smart Merging (Absorb small walks between identical routes)
+    """
+    if not hops: return []
+
+    # --- PASS 1: Basic Grouping ---
+    raw_legs = []
+    current_leg = None
+
+    for hop in hops:
+        # Normalize Mode
+        mode = "Bus"
+        if hop['mode'] == 'WALK':
+            mode = 'WALK'
+        elif hop['route']:
+            rn = str(hop['route']).upper()
+            if rn.startswith('U'):
+                mode = 'U-Bahn'
+            elif rn.startswith('S'):
+                mode = 'S-Bahn'
+            elif 'TRAM' in rn or (rn.isdigit() and int(rn) < 40):
+                mode = 'Tram'
+
+        route_label = hop['route'] if mode != 'WALK' else 'Walk'
+        node_data = hop['e']
+
+        if current_leg is None:
+            current_leg = {
+                "mode": mode,
+                "route": route_label,
+                "points": [hop['s'], hop['e']]
+            }
+            continue
+
+        should_merge = False
+        if mode == 'WALK' and current_leg['mode'] == 'WALK':
+            should_merge = True
+        elif mode == current_leg['mode'] and route_label == current_leg.get('route'):
+            should_merge = True
+
+        if should_merge:
+            current_leg['points'].append(node_data)
+        else:
+            raw_legs.append(current_leg)
+            current_leg = {
+                "mode": mode,
+                "route": route_label,
+                "points": [current_leg['points'][-1], node_data]
+            }
+    if current_leg: raw_legs.append(current_leg)
+
+    # --- PASS 2: ABSORB SMALL WALKS (Leg Smoothing) ---
+    # We look for pattern: [Transit A] -> [Walk < 200m] -> [Transit A]
+    # We merge this into a single [Transit A] leg.
+
+    smoothed_legs = []
+    i = 0
+    while i < len(raw_legs):
+        current = raw_legs[i]
+
+        # Check if we can bridge over the NEXT leg
+        if i + 2 < len(raw_legs):
+            next_leg = raw_legs[i + 1]
+            after_next = raw_legs[i + 2]
+
+            # Pattern Check:
+            # 1. Current is Transit
+            # 2. Next is WALK
+            # 3. After_Next is SAME Transit Route
+            if (current['mode'] != 'WALK' and
+                    next_leg['mode'] == 'WALK' and
+                    after_next['mode'] == current['mode'] and
+                    after_next['route'] == current['route']):
+
+                # Check walk distance (heuristic)
+                # Calculate simple distance of the walk leg
+                walk_pts = next_leg['points']
+                try:
+                    dist = geodesic(
+                        (walk_pts[0]['lat'], walk_pts[0]['lon']),
+                        (walk_pts[-1]['lat'], walk_pts[-1]['lon'])
+                    ).meters
+                except:
+                    dist = 9999
+
+                if dist < 300:  # Bridge gaps smaller than 300m
+                    # MERGE ALL THREE
+                    # We just concatenate the points: Current + Walk + After
+                    # Note: Points overlap at edges, so we slice
+                    merged_points = current['points'] + next_leg['points'][1:] + after_next['points'][1:]
+                    current['points'] = merged_points
+
+                    # Skip the next two legs since we consumed them
+                    i += 2
+
+        smoothed_legs.append(current)
+        i += 1
+
+    return smoothed_legs
+
+
+def add_walk_leg_helper(existing_legs, walk_points, to_start=True):
+    # (Same helper as before)
+    if not walk_points: return existing_legs
+    try:
+        dist = geodesic((walk_points[0]["lat"], walk_points[0]["lon"]),
+                        (walk_points[-1]["lat"], walk_points[-1]["lon"])).meters
+        if dist < 5: return existing_legs
+    except:
+        pass
+
+    walk_leg = {"mode": "WALK", "route": "Walk", "points": walk_points}
+    if existing_legs:
+        if to_start and existing_legs[0]["mode"] == "WALK":
+            existing_legs[0]["points"] = walk_points[:1] + existing_legs[0]["points"]
+            return existing_legs
+        if not to_start and existing_legs[-1]["mode"] == "WALK":
+            existing_legs[-1]["points"] = existing_legs[-1]["points"] + walk_points[-1:]
+            return existing_legs
+    return [walk_leg] + existing_legs if to_start else existing_legs + [walk_leg]
+
 @app.route('/')
 def index():
     # Center map on Munich
@@ -94,7 +255,7 @@ def get_path():
     start_id = request.args.get("start")
     end_id = request.args.get("end")
 
-    # Optional coordinates coming from geocoded addresses or map clicks
+    # [Standard coordinate handling]
     start_lat = request.args.get("start_lat", type=float)
     start_lon = request.args.get("start_lon", type=float)
     end_lat = request.args.get("end_lat", type=float)
@@ -118,154 +279,186 @@ def get_path():
         end_id = nearest_end["stop_id"] if nearest_end else None
 
     if not start_id or not end_id:
-        message = "start and end are required"
-        if (start_point and not start_id) or (end_point and not end_id):
-            message = "No nearby transit stop found for the provided locations"
-        return jsonify({"error": message}), 400
+        return jsonify({"error": "Start and End required"}), 400
 
-    query = """
-    MATCH (start:Stop {stop_id: $start_id}), (end:Stop {stop_id: $end_id})
-    MATCH path = shortestPath((start)-[:TRANSIT_ROUTE|WALK*]-(end))
-    RETURN path
+    print(f"--- Calculating Optimal Path (Smart Merging) ---")
+
+    # CONFIGURATION
+    K_PATHS = 50
+    BOARDING_PENALTY = 0  # 5 mins (Wait time)
+    TRANSFER_PENALTY = 600  # 10 mins (Line change)
+    WALKING_FACTOR = 0.2
+
+    # --- 1. CANDIDATE GENERATION ---
+    query_candidates = """
+    MATCH (source:Stop {stop_id: $start_id}), (target:Stop {stop_id: $end_id})
+    CALL gds.shortestPath.yens.stream('munich_transit', {
+        sourceNode: source,
+        targetNode: target,
+        k: $k,
+        relationshipWeightProperty: 'weight'
+    })
+    YIELD path
+    RETURN [n in nodes(path) | n.stop_id] as node_ids
     """
+
+    # --- 2. DETAILS LOOKUP ---
+    query_details = """
+    UNWIND range(0, size($node_ids)-2) as i
+    MATCH (a:Stop {stop_id: $node_ids[i]}), (b:Stop {stop_id: $node_ids[i+1]})
+    MATCH (a)-[r]-(b)
+    RETURN 
+        i,
+        a.stop_id as s_id, a.name as s_name, a.lat as s_lat, a.lon as s_lon,
+        b.stop_id as e_id, b.name as e_name, b.lat as e_lat, b.lon as e_lon,
+        collect({
+            type: type(r),
+            route: r.route_name,
+            weight: r.weight 
+        }) as options
+    ORDER BY i
+    """
+
+    best_legs = None
+    best_score = float('inf')
+    best_stats = {}
+    best_path_idx = -1
 
     try:
         with driver.session() as session:
-            result = session.run(query, start_id=start_id, end_id=end_id).single()
+            candidates_result = session.run(query_candidates, start_id=start_id, end_id=end_id, k=K_PATHS)
+            candidates = [rec["node_ids"] for rec in candidates_result]
 
-            if not result:
+            if not candidates:
                 return jsonify({"error": "No path found"}), 404
 
-            path = result["path"]
-            legs = []
+            print(f"Evaluating {len(candidates)} candidate paths...")
 
-            def get_data(node):
-                return {
-                    "lat": node.get('lat') or node.get('stop_lat'),
-                    "lon": node.get('lon') or node.get('stop_lon'),
-                    "name": node.get('name'),
-                    "id": node.get('stop_id')
-                }
+            for path_idx, node_ids in enumerate(candidates):
+                details_result = session.run(query_details, node_ids=node_ids)
+                hops = list(details_result)
 
-            nodes = path.nodes
-            relationships = path.relationships
+                # State Tracking
+                current_route_name = "START"
+                last_transit_route = None  # Remembers route even across walks
 
-            # --- PASS 1: INITIAL GROUPING ---
-            current_leg = {"mode": "START", "route": "", "points": [get_data(nodes[0])]}
+                path_score = 0
+                processed_hops = []
 
-            for i, rel in enumerate(relationships):
-                rel_type = rel.type
-                node_data = get_data(nodes[i + 1])
+                # Debug Counters
+                real_transfers = 0
+                pure_travel_time = 0
 
-                if rel_type == "WALK":
-                    new_mode = "WALK"
-                    route_label = "Walk"
-                else:
-                    new_mode = rel.get("type", "Bus")
-                    route_label = rel.get("route_name", "")
+                for hop in hops:
+                    options = hop['options']
+                    selected_option = None
 
-                should_merge = False
-                # Merge if same mode AND same route name
-                if new_mode == "WALK" and current_leg["mode"] == "WALK":
-                    should_merge = True
-                elif new_mode == current_leg["mode"] and route_label == current_leg.get("route"):
-                    should_merge = True
+                    # --- SMART STICKINESS ---
+                    # 1. Try to stick to current route (immediate)
+                    if current_route_name not in ["START", "Walk"]:
+                        for opt in options:
+                            if opt['route'] == current_route_name:
+                                selected_option = opt
+                                break
 
-                if should_merge:
-                    current_leg["points"].append(node_data)
-                else:
-                    if current_leg["mode"] != "START": legs.append(current_leg)
-                    current_leg = {"mode": new_mode, "route": route_label,
-                                   "points": [current_leg["points"][-1], node_data]}
+                    # 2. If currently walking, try to stick to LAST transit route (re-boarding same bus)
+                    if not selected_option and current_route_name == "Walk" and last_transit_route:
+                        for opt in options:
+                            if opt['route'] == last_transit_route:
+                                selected_option = opt
+                                break
 
-            legs.append(current_leg)
+                    if not selected_option:
+                        sorted_opts = sorted(options, key=lambda x: x['weight'] if x['weight'] is not None else 9999)
+                        selected_option = sorted_opts[0]
 
-            # --- PASS 2: CONVERT SHORT RIDES TO WALK ---
-            legs_pass_2 = [l for l in legs if l["mode"] != "START"]
+                        # --- SCORING ---
+                        target_type = selected_option['type']
+                        target_route = selected_option['route']
 
-            for leg in legs_pass_2:
-                # If it's a short hop (2 points) and NOT already a walk
-                if leg["mode"] != "WALK" and len(leg["points"]) == 2:
-                    p1 = leg["points"][0]
-                    p2 = leg["points"][1]
-                    try:
-                        dist = geodesic((p1['lat'], p1['lon']), (p2['lat'], p2['lon'])).meters
-                        if dist < 500:
-                            leg["mode"] = "WALK"
-                            leg["route"] = "Walk"
-                    except:
-                        pass
+                        is_transit = (target_type != "WALK")
 
-            # --- PASS 3: FINAL MERGE & SIMPLIFY ---
-            final_legs = []
-            if legs_pass_2:
-                current_final = legs_pass_2[0]
+                        # A) Boarding: Start -> Bus
+                        if current_route_name == "START" and is_transit:
+                            path_score += BOARDING_PENALTY
 
-                for i in range(1, len(legs_pass_2)):
-                    next_leg = legs_pass_2[i]
+                        # B) Transfer/Re-board: Walk -> Bus OR Bus A -> Bus B
+                        elif current_route_name != "START" and is_transit:
+                            # Are we getting back on the same bus we just walked from?
+                            if target_route == last_transit_route:
+                                pass  # Free re-boarding (same line)
+                            else:
+                                # It is a new line
+                                if last_transit_route is None:
+                                    # Walk -> Bus (First bus after start walk)
+                                    path_score += BOARDING_PENALTY
+                                else:
+                                    # Bus A -> ... -> Bus B
+                                    path_score += TRANSFER_PENALTY
+                                    real_transfers += 1
 
-                    # MERGE LOGIC
-                    if current_final["mode"] == "WALK" and next_leg["mode"] == "WALK":
-                        # CRITICAL FIX: Simplify geometry!
-                        # Instead of A->B->C, just do A->C
-                        start_pt = current_final["points"][0]
-                        end_pt = next_leg["points"][-1]
-                        current_final["points"] = [start_pt, end_pt]
+                    # --- UPDATE STATE ---
+                    if selected_option['type'] != "WALK":
+                        current_route_name = selected_option['route']
+                        last_transit_route = selected_option['route']
                     else:
-                        final_legs.append(current_final)
-                        current_final = next_leg
+                        current_route_name = "Walk"
+                        # Do NOT clear last_transit_route here! (Allows bridging gaps)
 
-                final_legs.append(current_final)
+                    raw_weight = selected_option['weight'] or 0
+                    pure_travel_time += raw_weight
 
-            # Prepend/append walk legs for off-network start/end points
-            def add_walk_leg(existing_legs, walk_points, to_start=True):
-                if not walk_points:
-                    return existing_legs
+                    if selected_option['type'] == "WALK":
+                        path_score += (raw_weight * WALKING_FACTOR)
+                    else:
+                        path_score += raw_weight
 
-                # Skip microscopic movements
-                try:
-                    leg_dist = geodesic(
-                        (walk_points[0]["lat"], walk_points[0]["lon"]),
-                        (walk_points[-1]["lat"], walk_points[-1]["lon"])
-                    ).meters
-                    if leg_dist < 5:
-                        return existing_legs
-                except Exception:
-                    pass
+                    processed_hops.append({
+                        "s": {"id": hop['s_id'], "name": hop['s_name'], "lat": hop['s_lat'], "lon": hop['s_lon']},
+                        "e": {"id": hop['e_id'], "name": hop['e_name'], "lat": hop['e_lat'], "lon": hop['e_lon']},
+                        "mode": selected_option['type'],
+                        "route": selected_option['route'],
+                        "weight": raw_weight
+                    })
 
-                walk_leg = {"mode": "WALK", "route": "Walk", "points": walk_points}
+                if path_idx < 50:
+                    print(
+                        f"Path {path_idx}: Time={int(pure_travel_time / 60)}m, Transfers={real_transfers}, Score={int(path_score)}")
 
-                if existing_legs:
-                    if to_start and existing_legs[0]["mode"] == "WALK":
-                        existing_legs[0]["points"] = walk_points[:1] + existing_legs[0]["points"]
-                        return existing_legs
-                    if not to_start and existing_legs[-1]["mode"] == "WALK":
-                        existing_legs[-1]["points"] = existing_legs[-1]["points"] + walk_points[-1:]
-                        return existing_legs
+                if path_score < best_score:
+                    best_score = path_score
+                    best_legs = build_legs_from_hops(processed_hops)  # Uses new merging logic
+                    best_path_idx = path_idx
+                    best_stats = {"time": int(pure_travel_time / 60), "transfers": real_transfers,
+                                  "score": int(path_score)}
 
-                if to_start:
-                    return [walk_leg] + existing_legs
-                return existing_legs + [walk_leg]
+            print("--------------------------------------------------")
+            print(f"🏆 SELECTED WINNER: Path {best_path_idx}")
+            print(f"   Score:     {best_stats.get('score')}")
+            print(f"   Time:      {best_stats.get('time')} min")
+            print(f"   Transfers: {best_stats.get('transfers')}")
+            print("--------------------------------------------------")
 
             if start_point and nearest_start:
-                start_walk_points = [
-                    {"lat": start_point["lat"], "lon": start_point["lon"], "name": start_point.get("name", "Start")},
-                    {"lat": nearest_start["lat"], "lon": nearest_start["lon"], "name": nearest_start.get("name"), "id": nearest_start.get("stop_id")},
-                ]
-                final_legs = add_walk_leg(final_legs, start_walk_points, to_start=True)
+                pts = [{"lat": start_point["lat"], "lon": start_point["lon"], "name": start_point["name"]},
+                       {"lat": nearest_start["lat"], "lon": nearest_start["lon"], "name": nearest_start.get("name")}]
+                best_legs = add_walk_leg_helper(best_legs, pts, True)
 
             if end_point and nearest_end:
-                end_walk_points = [
-                    {"lat": nearest_end["lat"], "lon": nearest_end["lon"], "name": nearest_end.get("name"), "id": nearest_end.get("stop_id")},
-                    {"lat": end_point["lat"], "lon": end_point["lon"], "name": end_point.get("name", "Destination")},
-                ]
-                final_legs = add_walk_leg(final_legs, end_walk_points, to_start=False)
+                pts = [{"lat": nearest_end["lat"], "lon": nearest_end["lon"], "name": nearest_end.get("name")},
+                       {"lat": end_point["lat"], "lon": end_point["lon"], "name": end_point["name"]}]
+                best_legs = add_walk_leg_helper(best_legs, pts, False)
 
-            return jsonify({"legs": final_legs})
+            return jsonify({"legs": best_legs, "debug_score": best_score})
 
     except Exception as e:
         print(f"Error: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({"error": str(e)}), 500
+
+
+# [Helpers build_legs_from_hops and add_walk_leg_helper remain the same]
 
 @app.route('/api/network')
 def get_network():
@@ -354,4 +547,4 @@ def get_route_by_name(route_name):
 
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(debug=True,port=8000)
