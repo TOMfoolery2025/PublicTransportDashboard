@@ -3,12 +3,13 @@ __pycache__/
 *.py[codz]
 *$py.class
 ./data/*.txt
-cache/
 # C extensions
 *.so
 .idea
 
 api/target
+*.gpickle
+*.pkl
 
 # Distribution / packaging
 data/
@@ -29,6 +30,7 @@ share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+cache/
 MANIFEST
 
 # PyInstaller

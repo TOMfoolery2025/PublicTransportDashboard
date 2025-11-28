@@ -8,154 +8,152 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const map = L.map('map', { zoomControl: true, preferCanvas: true }).setView(window.DEFAULT_CENTER || [48.1351, 11.5820], 12);
     L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-        attribution: '&copy; OpenStreetMap contributors &copy; CartoDB'
+        attribution: '&copy; OpenStreetMap'
     }).addTo(map);
 
-    // Fit map to known stop bounds if coordinates exist
-    const coords = stops.filter(s => s.lat && s.lon).map(s => [s.lat, s.lon]);
-    if (coords.length) {
-        map.fitBounds(coords, { padding: [30, 30] });
+    // Initial Dots
+    if (stops.length > 0) {
+        stops.forEach(s => {
+            L.circleMarker([s.lat, s.lon], {
+                radius: 2, color: '#444', weight: 0.5, fillColor: '#fff', fillOpacity: 0.5
+            }).addTo(map).bindTooltip(s.stop_name);
+        });
     }
 
-    let pathLayer = null;
-    let startMarker = null;
-    let endMarker = null;
-    let networkLayer = null;
-    let stopMarkers = null;
+    let activeLayers = [];
 
-    const setStatus = (message = '', type = 'idle') => {
-        statusEl.textContent = message;
+    const setStatus = (msg, type) => {
+        statusEl.textContent = msg;
         statusEl.className = `status status--${type}`;
     };
 
-    const renderSummary = path => {
-        if (!path || !path.length) {
-            routeSummary.classList.add('hidden');
-            return;
+    function decodePolyline(str, precision) {
+        var index = 0, lat = 0, lng = 0, coordinates = [], shift = 0, result = 0, byte = null, latitude_change, longitude_change, factor = Math.pow(10, precision || 5);
+        while (index < str.length) {
+            byte = null; shift = 0; result = 0;
+            do { byte = str.charCodeAt(index++) - 63; result |= (byte & 0x1f) << shift; shift += 5; } while (byte >= 0x20);
+            latitude_change = ((result & 1) ? ~(result >> 1) : (result >> 1));
+            shift = result = 0;
+            do { byte = str.charCodeAt(index++) - 63; result |= (byte & 0x1f) << shift; shift += 5; } while (byte >= 0x20);
+            longitude_change = ((result & 1) ? ~(result >> 1) : (result >> 1));
+            lat += latitude_change; lng += longitude_change;
+            coordinates.push([lat / factor, lng / factor]);
         }
-        const start = path[0];
-        const end = path[path.length - 1];
-        routeSummary.innerHTML = `
-            <div><strong>From:</strong> ${start.stop_name}</div>
-            <div><strong>To:</strong> ${end.stop_name}</div>
-            <div><strong>Stops:</strong> ${path.length}</div>
-        `;
-        routeSummary.classList.remove('hidden');
+        return coordinates;
+    }
+
+    const MODE_COLORS = {
+        'U-Bahn': '#0065AE',
+        'S-Bahn': '#4EBE3F',
+        'Tram':   '#E30613',
+        'Bus':    '#582C83',
+        'WALK':   '#777777'
     };
 
-    const drawRoute = path => {
-        const latLngs = path.map(p => [p.lat, p.lon]);
+    // --- NEW: PREPARE DATA IN PARALLEL ---
+    const prepareLegLayer = async (leg) => {
+        const points = leg.points;
+        const latLngs = points.map(p => [p.lat, p.lon]);
 
-        if (pathLayer) pathLayer.remove();
-        if (startMarker) startMarker.remove();
-        if (endMarker) endMarker.remove();
+        let color = MODE_COLORS[leg.mode] || MODE_COLORS['Bus'];
+        if (leg.mode.includes("Bus")) color = MODE_COLORS['Bus'];
+        if (leg.mode.includes("Tram")) color = MODE_COLORS['Tram'];
 
-        pathLayer = L.polyline(latLngs, { color: '#5cf0c0', weight: 6, opacity: 0.85 }).addTo(map);
-        startMarker = L.circleMarker(latLngs[0], { radius: 8, color: '#5cf0c0', fillColor: '#0f172a', fillOpacity: 1 }).addTo(map).bindTooltip('Start', { permanent: true, direction: 'right' });
-        endMarker = L.circleMarker(latLngs[latLngs.length - 1], { radius: 8, color: '#7bd7ff', fillColor: '#0f172a', fillOpacity: 1 }).addTo(map).bindTooltip('End', { permanent: true, direction: 'right' });
-
-        map.fitBounds(pathLayer.getBounds(), { padding: [20, 20] });
-        renderSummary(path);
-    };
-
-    const drawNetwork = (network) => {
-        if (networkLayer) networkLayer.remove();
-        if (stopMarkers) stopMarkers.remove();
-
-        const edges = network.edges || [];
-        const stops = network.stops || [];
-        const routes = network.routes || [];
-
-        networkLayer = L.layerGroup();
-
-        if (routes.length) {
-            routes.forEach(routeCoords => {
-                if (!routeCoords || routeCoords.length < 2) return;
-                L.polyline(routeCoords, {
-                    color: '#304771',
-                    weight: 0.5,
-                    opacity: 0.45,
-                    interactive: false,
-                }).addTo(networkLayer);
+        // 1. Walking: Simple Dashed Line (No API call needed)
+        if (leg.mode === 'WALK') {
+            const line = L.polyline(latLngs, {
+                color: '#666', weight: 5, dashArray: '5, 12', opacity: 0.8
             });
-        } else {
-            edges.forEach(edge => {
-                if (!edge.coords) return;
-                L.polyline(edge.coords, {
-                    color: '#2a3f6e',
-                    weight: 1.8,
-                    opacity: 0.4,
-                    interactive: false,
-                }).addTo(networkLayer);
-            });
+            // Return the layer and the marker
+            return [line, points[0]];
         }
 
-        stopMarkers = L.layerGroup();
-        stops.forEach(s => {
-            if (!s.lat || !s.lon) return;
-            L.circleMarker([s.lat, s.lon], {
-                radius: 3,
-                stroke: true,
-                color: '#ffffff',   // stroke color
-                weight: 0.5,       // stroke width
-                fillColor: '#1b2f5b',
-                fillOpacity: 1
-            })
-            .bindTooltip(s.stop_name, { direction: 'top', offset: [0, -4], opacity: 0.8 })
-            .addTo(stopMarkers);
-        });
-
-
-        networkLayer.addTo(map);
-        stopMarkers.addTo(map);
-    };
-
-    const loadNetwork = async () => {
-        setStatus('', 'idle');
+        // 2. Transit: Fetch OSRM in background
         try {
-            const res = await fetch('/api/network');
+            const osrmCoords = points.map(p => `${p.lon},${p.lat}`).join(';');
+            const url = `https://router.project-osrm.org/route/v1/driving/${osrmCoords}?overview=full`;
+
+            const res = await fetch(url);
             const data = await res.json();
-            drawNetwork(data);
-            setStatus('', 'idle');
-        } catch (err) {
-            console.error(err);
-            setStatus('', 'error');
+
+            if(data.routes && data.routes.length > 0) {
+                 const decoded = decodePolyline(data.routes[0].geometry, 5);
+                 const line = L.polyline(decoded, { color: color, weight: 6, opacity: 0.9 });
+                 return [line, points[0]];
+            }
+        } catch(e) {
+            console.warn("OSRM failed, using straight line");
         }
+
+        // Fallback
+        const line = L.polyline(latLngs, { color: color, weight: 6, opacity: 0.9 });
+        return [line, points[0]];
     };
 
     const handleRoute = async () => {
         const startId = startSelect.value;
         const endId = endSelect.value;
+        if (!startId || !endId) return;
 
-        if (!startId || !endId) {
-        setStatus('', 'error');
-        return;
-    }
-    if (startId === endId) {
-        setStatus('', 'error');
-        return;
-    }
+        // Clear previous
+        activeLayers.forEach(l => map.removeLayer(l));
+        activeLayers = [];
 
-    setStatus('', 'idle');
-    findPathBtn.disabled = true;
-    findPathBtn.textContent = 'Drawing...';
+        setStatus('Routing...', 'idle');
+        findPathBtn.textContent = 'Calculating...';
+        findPathBtn.disabled = true;
 
         try {
+            // 1. Get Legs from Python
             const res = await fetch(`/api/path?start=${encodeURIComponent(startId)}&end=${encodeURIComponent(endId)}`);
-            if (!res.ok) throw new Error('No path found');
             const data = await res.json();
-            drawRoute(data.path);
-            setStatus('', 'success');
-        } catch (err) {
-            console.error(err);
-            setStatus('', 'error');
-            renderSummary(null);
+
+            if (data.legs) {
+                setStatus('Drawing map...', 'idle');
+
+                // 2. PARALLEL PROCESSING: Fire all requests at once
+                const promises = data.legs.map(leg => prepareLegLayer(leg));
+                const results = await Promise.all(promises);
+
+                // 3. Render everything instantly
+                results.forEach(([layer, startPoint], index) => {
+                    layer.addTo(map);
+                    activeLayers.push(layer);
+
+                    // Add Transition Markers
+                    const marker = L.circleMarker([startPoint.lat, startPoint.lon], {
+                        radius: 4, color: '#000', fillColor: '#fff', fillOpacity: 1
+                    }).addTo(map).bindTooltip(data.legs[index].mode);
+                    activeLayers.push(marker);
+                });
+
+                // 4. Add Final Destination Marker
+                const lastLeg = data.legs[data.legs.length-1];
+                const lastPt = lastLeg.points[lastLeg.points.length-1];
+                L.circleMarker([lastPt.lat, lastPt.lon], {
+                    radius: 6, color: '#000', fillColor: '#000', fillOpacity: 1
+                }).addTo(map).bindTooltip("End");
+
+
+                setStatus(`Route found!`, 'success');
+
+                // Fit bounds
+                const allPts = data.legs.flatMap(l => l.points.map(p => [p.lat, p.lon]));
+                map.fitBounds(allPts, { padding: [50, 50] });
+
+                routeSummary.innerHTML = data.legs.map(l =>
+                    `<div><strong>${l.mode}</strong> (${l.route || ''}): ${l.points.length-1} stops</div>`
+                ).join('');
+                routeSummary.classList.remove('hidden');
+            }
+        } catch (e) {
+            console.error(e);
+            setStatus('No path found.', 'error');
         } finally {
             findPathBtn.disabled = false;
             findPathBtn.textContent = 'Draw route';
         }
     };
 
-    loadNetwork();
     findPathBtn.addEventListener('click', handleRoute);
 });

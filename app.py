@@ -1,240 +1,172 @@
 import os
-import zipfile
-import pandas as pd
 from flask import Flask, render_template, jsonify, request
-import networkx as nx
 from neo4j import GraphDatabase
 from dotenv import load_dotenv
+from geopy.distance import geodesic
+
 
 app = Flask(__name__)
-
 load_dotenv()
 
-GTFS_ZIP_PATH = os.getenv("GTFS_ZIP_PATH", "gtfw-data-stops-trips.zip")
-TRAIN_ROUTE_TYPES = {0, 1, 2}
+# --- CONFIGURATION ---
+NEO4J_URI = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+NEO4J_USER = os.getenv("NEO4J_USER", "neo4j")
+NEO4J_PASSWORD = os.getenv("NEO4J_PASSWORD", "password")
+NEO4J_DB = "gtfs"
+
+driver = GraphDatabase.driver(NEO4J_URI, auth=(NEO4J_USER, NEO4J_PASSWORD))
 
 
-def load_non_train_route_ids(zip_path):
-    """Read routes.txt to identify non-train route IDs (as strings)."""
-    with zipfile.ZipFile(zip_path, "r") as z:
-        with z.open("routes.txt") as f:
-            routes = pd.read_csv(f, dtype={"route_id": str})
-    return routes[~routes["route_type"].isin(TRAIN_ROUTE_TYPES)]["route_id"].unique().tolist()
-
-
-def fetch_graph_from_neo4j(route_ids):
-    """Load stops, edges, and stop sequences from Neo4j filtered by the provided route IDs."""
-    uri = os.getenv("NEO4J_URI")
-    user = os.getenv("NEO4J_USER")
-    password = os.getenv("NEO4J_PASSWORD")
-    if not all([uri, user, password]):
-        raise RuntimeError("NEO4J_URI/NEO4J_USER/NEO4J_PASSWORD must be set in the environment.")
-
-    driver = GraphDatabase.driver(uri, auth=(user, password), encrypted=False)
-
-    def get_stops(tx):
-        query = """
-        MATCH (s:Stop)
-        RETURN toString(s.stop_id) AS stop_id, s.name AS stop_name, s.lat AS stop_lat, s.lon AS stop_lon
-        """
-        return [record.data() for record in tx.run(query)]
-
-    def get_edges(tx, route_ids):
-        query = """
-        MATCH (r:Route)-[:HAS_TRIP]->(t:Trip)-[:HAS_STOP_TIME]->(st1:StopTime)-[:NEXT]->(st2:StopTime)
-        WHERE r.route_id IN $route_ids
-        RETURN DISTINCT toString(st1.stop_id) AS source, toString(st2.stop_id) AS target
-        """
-        return [record.data() for record in tx.run(query, route_ids=route_ids)]
-
-    def get_sequences(tx, route_ids):
-        query = """
-        MATCH (r:Route)-[:HAS_TRIP]->(t:Trip)-[:HAS_STOP_TIME]->(st:StopTime)
-        WHERE r.route_id IN $route_ids
-        RETURN t.trip_id AS trip_id, toString(st.stop_id) AS stop_id, st.sequence AS seq
-        ORDER BY t.trip_id, seq
-        """
-        return [record.data() for record in tx.run(query, route_ids=route_ids)]
-
+# --- CACHE STOPS ---
+# We load these once at startup.
+# IMPORTANT: We use the exact keys your 'index.html' expects ("stop_id", "stop_name").
+def load_all_stops():
+    print("Loading stops from Neo4j...")
+    query = """
+    MATCH (s:Stop) 
+    RETURN s.stop_id AS stop_id, s.name AS stop_name, s.lat AS lat, s.lon AS lon
+    ORDER BY s.name
+    """
     with driver.session() as session:
-        stops_data = session.execute_read(get_stops)
-        edges_data = session.execute_read(get_edges, route_ids=route_ids)
-        sequences_data = session.execute_read(get_sequences, route_ids=route_ids)
-
-    driver.close()
-    return stops_data, edges_data, sequences_data
+        result = session.run(query)
+        data = [record.data() for record in result]
+    print(f"Cached {len(data)} stops.")
+    return data
 
 
-def build_graph(stops_data, edges_data):
-    """Construct a NetworkX graph from stop and edge records."""
-    G = nx.Graph()
-    for stop in stops_data:
-        lat, lon = stop.get("stop_lat"), stop.get("stop_lon")
-        if pd.isna(lat) or pd.isna(lon):
-            continue
-        G.add_node(
-            stop["stop_id"],
-            name=stop.get("stop_name", str(stop["stop_id"])),
-            pos=(lat, lon),
-        )
+# Load immediately on start
+all_stops = load_all_stops()
 
-    for edge in edges_data:
-        u = edge.get("source")
-        v = edge.get("target")
-        if u in G and v in G:
-            G.add_edge(u, v)
-
-    return G
-
-
-print("Loading route filters from GTFS zip...")
-NON_TRAIN_ROUTE_IDS = load_non_train_route_ids(GTFS_ZIP_PATH)
-print(f"Non-train routes: {len(NON_TRAIN_ROUTE_IDS)}")
-
-print("Fetching stops, edges, and sequences from Neo4j...")
-stops_data, edges_data, sequences_data = fetch_graph_from_neo4j(NON_TRAIN_ROUTE_IDS)
-print(f"Fetched {len(stops_data)} stops, {len(edges_data)} edges, {len(sequences_data)} stop-time records.")
-
-G = build_graph(stops_data, edges_data)
-connected_nodes = {n for n, deg in G.degree() if deg > 0}
-
-# Build route polylines from stop sequences (deduplicated by trip)
-def build_route_geometries(seq_rows, graph, connected):
-    routes = []
-    current_trip = None
-    current_seq = []
-
-    def flush_route():
-        if len(current_seq) < 2:
-            return
-        coords = []
-        for stop_id in current_seq:
-            if stop_id not in graph or stop_id not in connected:
-                return
-            lat, lon = graph.nodes[stop_id].get("pos", (None, None))
-            if pd.isna(lat) or pd.isna(lon):
-                return
-            coords.append((lat, lon))
-        if len(coords) > 1:
-            routes.append(coords)
-
-    for row in seq_rows:
-        trip_id = row.get("trip_id")
-        stop_id = str(row.get("stop_id"))
-        if trip_id != current_trip:
-            flush_route()
-            current_trip = trip_id
-            current_seq = []
-        current_seq.append(stop_id)
-    flush_route()
-    return routes
-
-route_geometries = build_route_geometries(sequences_data, G, connected_nodes)
-
-stops_list = sorted(
-    [
-        {
-            "stop_id": stop_id,
-            "stop_name": data.get("name", str(stop_id)),
-            "lat": data.get("pos", (None, None))[0],
-            "lon": data.get("pos", (None, None))[1],
-        }
-        for stop_id, data in G.nodes(data=True)
-        if stop_id in connected_nodes
-    ],
-    key=lambda s: s["stop_name"],
-)
-
-
-def normalize_stop_id(raw_id):
-    """Normalize stop IDs to string to match graph node types."""
-    if raw_id is None:
-        return None
-    return str(raw_id)
 
 @app.route('/')
 def index():
-    """
-    Renders the main page with the map and controls.
-    """
-    # Default center on Munich; client will refine bounds after loading
+    # Center map on Munich
     munich_center = [48.1351, 11.5820]
-    return render_template('index.html', stops=stops_list, center=munich_center)
+    return render_template('index.html', stops=all_stops, center=munich_center)
 
 
 @app.route('/api/path')
 def get_path():
-    """
-    Compute the shortest path between two stops on the server graph.
-    Returns an ordered list of coordinates for Leaflet.
-    """
-    start_id = normalize_stop_id(request.args.get("start"))
-    end_id = normalize_stop_id(request.args.get("end"))
+    start_id = request.args.get("start")
+    end_id = request.args.get("end")
 
     if not start_id or not end_id:
         return jsonify({"error": "start and end are required"}), 400
 
+    query = """
+    MATCH (start:Stop {stop_id: $start_id}), (end:Stop {stop_id: $end_id})
+    MATCH path = shortestPath((start)-[:TRANSIT_ROUTE|WALK*]-(end))
+    RETURN path
+    """
+
     try:
-        stop_sequence = nx.shortest_path(G, source=start_id, target=end_id)
-    except (nx.NetworkXNoPath, nx.NodeNotFound):
-        return jsonify({"error": "No path found"}), 404
+        with driver.session() as session:
+            result = session.run(query, start_id=start_id, end_id=end_id).single()
 
-    coords = []
-    for stop_id in stop_sequence:
-        node = G.nodes[stop_id]
-        lat, lon = node.get("pos", (None, None))
-        coords.append(
-            {
-                "stop_id": stop_id,
-                "stop_name": node.get("name", str(stop_id)),
-                "lat": lat,
-                "lon": lon,
-            }
-        )
+            if not result:
+                return jsonify({"error": "No path found"}), 404
 
-    return jsonify({"path": coords})
+            path = result["path"]
+            legs = []
 
+            def get_data(node):
+                return {
+                    "lat": node.get('lat') or node.get('stop_lat'),
+                    "lon": node.get('lon') or node.get('stop_lon'),
+                    "name": node.get('name'),
+                    "id": node.get('stop_id')
+                }
+
+            nodes = path.nodes
+            relationships = path.relationships
+
+            # --- PASS 1: INITIAL GROUPING ---
+            current_leg = {"mode": "START", "route": "", "points": [get_data(nodes[0])]}
+
+            for i, rel in enumerate(relationships):
+                rel_type = rel.type
+                node_data = get_data(nodes[i + 1])
+
+                if rel_type == "WALK":
+                    new_mode = "WALK"
+                    route_label = "Walk"
+                else:
+                    new_mode = rel.get("type", "Bus")
+                    route_label = rel.get("route_name", "")
+
+                should_merge = False
+                # Merge if same mode AND same route name
+                if new_mode == "WALK" and current_leg["mode"] == "WALK":
+                    should_merge = True
+                elif new_mode == current_leg["mode"] and route_label == current_leg.get("route"):
+                    should_merge = True
+
+                if should_merge:
+                    current_leg["points"].append(node_data)
+                else:
+                    if current_leg["mode"] != "START": legs.append(current_leg)
+                    current_leg = {"mode": new_mode, "route": route_label,
+                                   "points": [current_leg["points"][-1], node_data]}
+
+            legs.append(current_leg)
+
+            # --- PASS 2: CONVERT SHORT RIDES TO WALK ---
+            legs_pass_2 = [l for l in legs if l["mode"] != "START"]
+
+            for leg in legs_pass_2:
+                # If it's a short hop (2 points) and NOT already a walk
+                if leg["mode"] != "WALK" and len(leg["points"]) == 2:
+                    p1 = leg["points"][0]
+                    p2 = leg["points"][1]
+                    try:
+                        dist = geodesic((p1['lat'], p1['lon']), (p2['lat'], p2['lon'])).meters
+                        if dist < 1000:
+                            leg["mode"] = "WALK"
+                            leg["route"] = "Walk"
+                    except:
+                        pass
+
+            # --- PASS 3: FINAL MERGE & SIMPLIFY ---
+            final_legs = []
+            if legs_pass_2:
+                current_final = legs_pass_2[0]
+
+                for i in range(1, len(legs_pass_2)):
+                    next_leg = legs_pass_2[i]
+
+                    # MERGE LOGIC
+                    if current_final["mode"] == "WALK" and next_leg["mode"] == "WALK":
+                        # CRITICAL FIX: Simplify geometry!
+                        # Instead of A->B->C, just do A->C
+                        start_point = current_final["points"][0]
+                        end_point = next_leg["points"][-1]
+                        current_final["points"] = [start_point, end_point]
+                    else:
+                        final_legs.append(current_final)
+                        current_final = next_leg
+
+                final_legs.append(current_final)
+
+            return jsonify({"legs": final_legs})
+
+    except Exception as e:
+        print(f"Error: {e}")
+        return jsonify({"error": str(e)}), 500
 
 @app.route('/api/network')
 def get_network():
     """
-    Return all stops and edges with coordinates for drawing the bus network.
+    Restores the 'network' view.
+    NOTE: We return ALL stops, but we keep 'edges' empty by default.
+    Drawing 300,000+ lines (the real network) will freeze your browser instantly.
     """
-    stops = [
-        {
-            "stop_id": stop_id,
-            "stop_name": data.get("name", str(stop_id)),
-            "lat": data.get("pos", (None, None))[0],
-            "lon": data.get("pos", (None, None))[1],
-        }
-        for stop_id, data in G.nodes(data=True)
-        if stop_id in connected_nodes
-    ]
+    return jsonify({
+        "stops": all_stops,
+        "edges": [],  # Intentionally empty for performance
+        "routes": []  # Intentionally empty for performance
+    })
 
-    edges = []
-    for u, v in G.edges():
-        u_node = G.nodes[u]
-        v_node = G.nodes[v]
-        u_pos = u_node.get("pos")
-        v_pos = v_node.get("pos")
-        if not u_pos or not v_pos:
-            continue
-        if u not in connected_nodes or v not in connected_nodes:
-            continue
-        edges.append(
-            {
-                "from": u,
-                "to": v,
-                "coords": [(u_pos[0], u_pos[1]), (v_pos[0], v_pos[1])],
-            }
-        )
 
-    routes = [
-        [(lat, lon) for lat, lon in coords]
-        for coords in route_geometries
-    ]
-
-    return jsonify({"stops": stops, "edges": edges, "routes": routes})
 
 if __name__ == '__main__':
     app.run(debug=True)
