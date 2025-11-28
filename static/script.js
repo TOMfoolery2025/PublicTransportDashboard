@@ -45,6 +45,7 @@ document.addEventListener('DOMContentLoaded', () => {
     updateStopVisibility();
 
     let activeLayers = [];
+    let currentHoverTooltip = null;
 
     const setStatus = (msg, type) => {
         statusEl.textContent = msg;
@@ -296,35 +297,6 @@ document.addEventListener('DOMContentLoaded', () => {
         return totalDistance;
     }
 
-    // Calculate a point perpendicular to the line at a given percentage
-    function calculateOffsetPoint(start, end, percentage, offsetDistance) {
-        // Convert offset distance from meters to degrees (approximate)
-        const offsetDegrees = offsetDistance / 111000; // Rough conversion
-
-        // Calculate the direction vector
-        const dx = end[1] - start[1];
-        const dy = end[0] - start[0];
-
-        // Calculate perpendicular vector (rotate 90 degrees)
-        const perpX = -dy;
-        const perpY = dx;
-
-        // Normalize
-        const length = Math.sqrt(perpX * perpX + perpY * perpY);
-        const normX = perpX / length;
-        const normY = perpY / length;
-
-        // Calculate the point along the line
-        const alongX = start[1] + dx * percentage;
-        const alongY = start[0] + dy * percentage;
-
-        // Apply offset
-        return [
-            alongY + normY * offsetDegrees,
-            alongX + normX * offsetDegrees
-        ];
-    }
-
     const MODE_COLORS = {
         'U-Bahn': '#0065AE', // MVG Blue
         'S-Bahn': '#4EBE3F', // MVG Green
@@ -350,6 +322,14 @@ document.addEventListener('DOMContentLoaded', () => {
         // Get destination stop name for this leg
         const destinationStop = points[points.length - 1];
         const destinationName = destinationStop.name || `Stop ${destinationStop.id}`;
+
+        // Create tooltip text
+        let tooltipText = '';
+        if (leg.mode === 'WALK') {
+            tooltipText = `Walk: ${formatDistance(distance)} to ${destinationName}`;
+        } else {
+            tooltipText = `${leg.route || leg.mode}: ${formatDistance(distance)} to ${destinationName}`;
+        }
 
         // 1. Walking: Use OSRM walking profile for realistic pedestrian routes
         if (leg.mode === 'WALK') {
@@ -388,7 +368,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }
 
         // 2. STRATEGY: RAILS AND TRAMS (Straight Line - No OSRM)
-        // We moved Tram here to prevent loops!
         else if (leg.mode.includes("U-Bahn") || leg.mode.includes("S-Bahn") || leg.mode.includes("Tram")) {
             // Force straight lines
             routeGeometry = latLngs;
@@ -435,47 +414,44 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
-        // Create distance label
-        let label = null;
-        if (routeGeometry.length > 0) {
-            // Calculate a point that's offset from the path
-            let labelPoint;
-            if (routeGeometry.length >= 2) {
-                // Use 40% along the path and offset by ~20 meters
-                const start = routeGeometry[0];
-                const end = routeGeometry[routeGeometry.length - 1];
-                labelPoint = calculateOffsetPoint(start, end, 0.4, 20);
-            } else {
-                // Fallback to midpoint if we don't have enough points
-                const midIndex = Math.floor(routeGeometry.length / 2);
-                labelPoint = routeGeometry[midIndex];
-            }
+        // Update tooltip text with actual distance
+        if (leg.mode === 'WALK') {
+            tooltipText = `Walk: ${formatDistance(distance)} to ${destinationName}`;
+        } else {
+            tooltipText = `${leg.route || leg.mode}: ${formatDistance(distance)} to ${destinationName}`;
+        }
 
-            let labelText = '';
-            if (leg.mode === 'WALK') {
-                labelText = `Walk: ${formatDistance(distance)} to ${destinationName}`;
-            } else {
-                labelText = `${leg.route || leg.mode}: ${formatDistance(distance)} to ${destinationName}`;
-            }
+        // Add hover tooltip to the line
+        if (line) {
+            line.bindTooltip(tooltipText, {
+                sticky: true,
+                direction: 'top',
+                className: 'path-tooltip',
+                opacity: 0.9
+            });
 
-            // Create a custom div icon for the label
-            // Create a custom div icon for the label
-            label = L.marker(labelPoint, {
-                icon: L.divIcon({
-                    className: 'route-label',
-                    html: `<div class="route-label-inner">${labelText}</div>`,
-                    iconSize: [200, 35], // Increased from [160, 30] to accommodate longer text
-                    iconAnchor: [100, 17]
-                }),
-                interactive: false,
-                zIndexOffset: 1000
+            // Add hover effects
+            line.on('mouseover', function(e) {
+                this.setStyle({
+                    weight: this.options.weight + 2,
+                    opacity: 1.0
+                });
+                if (!L.Browser.ie && !L.Browser.opera) {
+                    this.bringToFront();
+                }
+            });
+
+            line.on('mouseout', function(e) {
+                this.setStyle({
+                    weight: this.options.weight - 2,
+                    opacity: this.options.opacity
+                });
             });
         }
 
         return {
             line: line,
             startPoint: points[0],
-            label: label,
             distance: distance,
             mode: leg.mode,
             route: leg.route,
@@ -530,10 +506,6 @@ document.addEventListener('DOMContentLoaded', () => {
                     if(result.line) {
                         result.line.addTo(map);
                         activeLayers.push(result.line);
-                    }
-                    if (result.label) {
-                        result.label.addTo(map);
-                        activeLayers.push(result.label);
                     }
 
                     // Add transition markers (only for transit modes)
