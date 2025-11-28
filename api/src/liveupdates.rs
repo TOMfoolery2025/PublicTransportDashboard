@@ -36,6 +36,15 @@ impl GTFSTime {
             _ => "Invalid Time".to_string(),
         }
     }
+
+    pub fn is_in_past(&self) -> bool {
+        let now = Utc::now().with_timezone(&Berlin);
+        self.timestamp < now.timestamp()
+    }
+
+    pub fn is_in_future(&self) -> bool {
+        !self.is_in_past()
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -99,6 +108,7 @@ pub async fn update_listener(update_store: Arc<UpdateStore>) {
         .unwrap();
 
     let mut last_modified: Option<DateTime<Utc>> = None;
+
     let mut etag: Option<String> = None;
     loop {
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -222,7 +232,20 @@ pub async fn update_listener(update_store: Arc<UpdateStore>) {
                 update_store.trip_updates.insert(trip_id, update);
             }
         }
+        update_store.trip_updates.retain(|_k, v| {
+            if let Some(last_stop) = v.stops.last() {
+                last_stop.departure.is_in_future()
+            } else {
+                false
+            }
+        });
+
+        update_store.scheduled_departures.retain(|_k, v| {
+            v.retain(|departure| departure.departure.is_in_future());
+            !v.is_empty()
+        });
         // Clean up old scheduled departures
+
 
 
         let feed_message = feed.unwrap();
