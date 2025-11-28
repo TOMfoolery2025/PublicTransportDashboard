@@ -24,18 +24,16 @@ document.addEventListener('DOMContentLoaded', () => {
     let mapPinMode = null;
 
     // Initial stop dots (only show after a zoom threshold to keep map clean)
-    const STOP_VISIBILITY_ZOOM = 16;
-    const stopIcon = L.icon({
-        iconUrl: '/static/Amenity_bus_station.svg',
-        iconSize: [14, 14],
-        iconAnchor: [7, 7]
-    });
+    const STOP_VISIBILITY_ZOOM = 15;
     const stopsLayer = L.layerGroup();
     if (stops.length > 0) {
         stops.forEach(s => {
-            const marker = L.marker([s.lat, s.lon], {
-                icon: stopIcon,
-                keyboard: false
+            const marker = L.circleMarker([s.lat, s.lon], {
+                radius: 3,
+                color: '#000',
+                weight: 1.2,
+                fillColor: '#fff',
+                fillOpacity: 0.9
             }).bindTooltip(s.stop_name);
             marker.on('click', () => openStopPopup(s, marker));
             marker.addTo(stopsLayer);
