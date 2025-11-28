@@ -160,3 +160,93 @@ body {
     .layout { grid-template-columns: 1fr; }
     #map { height: 520px; }
 }
+
+
+/* Add to existing CSS */
+
+/* Autocomplete styles */
+.autocomplete-results {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-top: none;
+    border-radius: 0 0 12px 12px;
+    max-height: 200px;
+    overflow-y: auto;
+    z-index: 1000;
+    box-shadow: var(--shadow);
+    display: none;
+}
+
+.autocomplete-results:not(:empty) {
+    display: block;
+}
+
+.autocomplete-item {
+    padding: 12px 14px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--border);
+    transition: background-color 120ms ease;
+}
+
+.autocomplete-item:hover {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.autocomplete-item:last-child {
+    border-bottom: none;
+}
+
+.autocomplete-item strong {
+    display: block;
+    font-weight: 600;
+    margin-bottom: 2px;
+}
+
+.autocomplete-item small {
+    color: var(--muted);
+    font-size: 11px;
+}
+
+/* Make sure the field is positioned relative for absolute positioning of results */
+.field {
+    position: relative;
+}
+
+/* Update input styles to match selects */
+.field input[type="text"] {
+    width: 100%;
+    padding: 12px 14px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    background: var(--panel-2);
+    color: var(--text);
+    font-weight: 600;
+    outline: none;
+    font-family: inherit;
+}
+
+.field input[type="text"]:focus {
+    border-color: var(--accent);
+}
+
+/* Keep all your existing styles below */
+* { box-sizing: border-box; }
+
+:root {
+    --bg: #0f172a;
+    --panel: #0b1020;
+    --panel-2: #121b32;
+    --text: #e4eaf5;
+    --muted: #98a6c3;
+    --accent: #5cf0c0;
+    --accent-2: #7bd7ff;
+    --border: rgba(255,255,255,0.08);
+    --shadow: 0 20px 60px rgba(0,0,0,0.35);
+    font-family: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+/* ... rest of your existing CSS ... */

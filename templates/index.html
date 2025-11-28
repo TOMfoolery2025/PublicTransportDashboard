@@ -18,7 +18,7 @@
             <div class="hero__text">
                 <p class="eyebrow">Munich Transit</p>
                 <h1>Find the quickest hop between any two stops.</h1>
-                <p class="subhead">Pick your origin and destination, then see the path traced on the city grid.</p>
+                <p class="subhead">Type the names of your origin and destination stops.</p>
             </div>
         </header>
 
@@ -26,21 +26,13 @@
             <section class="controls-card">
                 <div class="field">
                     <label for="start-stop">Start stop</label>
-                    <select id="start-stop">
-                        <option value="">Select a starting stop</option>
-                        {% for stop in stops %}
-                            <option value="{{ stop.stop_id }}">{{ stop.stop_name }}</option>
-                        {% endfor %}
-                    </select>
+                    <input type="text" id="start-stop" placeholder="Type to search for a stop...">
+                    <div id="start-results" class="autocomplete-results"></div>
                 </div>
                 <div class="field">
                     <label for="end-stop">Destination</label>
-                    <select id="end-stop">
-                        <option value="">Select a destination stop</option>
-                        {% for stop in stops %}
-                            <option value="{{ stop.stop_id }}">{{ stop.stop_name }}</option>
-                        {% endfor %}
-                    </select>
+                    <input type="text" id="end-stop" placeholder="Type to search for a stop...">
+                    <div id="end-results" class="autocomplete-results"></div>
                 </div>
                 <button id="find-path-btn" class="cta">Draw route</button>
                 <div id="status" class="status status--idle"></div>
@@ -59,9 +51,7 @@
     </script>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-
     <script src="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.js"></script>
-
     <script src="{{ url_for('static', filename='script.js') }}"></script>
 </body>
 </html>
