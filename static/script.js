@@ -780,10 +780,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 activeRouteLayer = null;
             }
             
-            const res = await fetch(`/api/trip_stops/${encodeURIComponent(tripId)}`);
-            const data = await res.json();
-            if (!res.ok || !data.stops || !data.stops.length) {
-                // fallback to route name if trip fails
+            // 1. Fetch from External API via Proxy
+            const targetUrl = `https://civiguild.com/api/trips/allStops/${encodeURIComponent(tripId)}`;
+            const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
+
+            const res = await fetch(proxyUrl);
+            const rawData = await res.json();
+
+            // 2. Validate Data
+            if (!res.ok || !Array.isArray(rawData) || rawData.length === 0) {
                 if (routeName) {
                     await drawRouteByName(routeName);
                 } else {
@@ -792,24 +797,40 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
 
-            const coords = data.stops.map(s => [s.lat, s.lon]);
+            // 3. Map Data
+            const stops = rawData.map(s => ({
+                lat: s.stop_lat,
+                lon: s.stop_lon,
+                name: s.stop_name,
+                id: s.stop_id,
+                stop_id: s.stop_id,
+                sequence: s.sequence
+            }));
+
+            const coords = stops.map(s => [s.lat, s.lon]);
+
+            // 4. Determine Mode and Drawing Style
             const routeMode = guessModeFromRouteName(routeName || '');
             const routeColor = modeToColor(routeMode);
-            const isBusRoute = routeMode === 'Bus' || (routeName && (routeName.match(/^\d/) || routeName.toLowerCase().includes('bus')));
+
+            // CHANGED: Strictly check for 'Bus'.
+            // Previous logic forced numbered routes (like Tram 19) to be buses.
+            // Now, if routeMode is 'Tram', isBusRoute will be false -> straight lines.
+            const isBusRoute = routeMode === 'Bus';
 
             if (isBusRoute && coords.length >= 2) {
-                // For bus trips, use OSRM
+                // OSRM (Roads) - Only for Buses
                 clearConstructedRoute();
-                await drawTripWithOSRM(tripId, routeName, coords, data.stops, routeColor);
+                await drawTripWithOSRM(tripId, routeName, coords, stops, routeColor);
             } else {
-                // For rail trips, use straight lines
+                // Straight Lines - For Trams, U-Bahn, S-Bahn
                 activeRouteLayer = L.layerGroup();
                 L.polyline(coords, {
                     color: routeColor,
                     weight: 5,
                     opacity: 0.9
                 }).addTo(activeRouteLayer);
-                addStopMarkersToLayer(data.stops, routeColor);
+                addStopMarkersToLayer(stops, routeColor);
                 activeRouteLayer.addTo(map);
                 
                 if (coords.length) {
