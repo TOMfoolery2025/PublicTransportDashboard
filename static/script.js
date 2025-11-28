@@ -173,6 +173,35 @@ document.addEventListener('DOMContentLoaded', () => {
         return totalDistance;
     }
 
+    // Calculate a point perpendicular to the line at a given percentage
+    function calculateOffsetPoint(start, end, percentage, offsetDistance) {
+        // Convert offset distance from meters to degrees (approximate)
+        const offsetDegrees = offsetDistance / 111000; // Rough conversion
+        
+        // Calculate the direction vector
+        const dx = end[1] - start[1];
+        const dy = end[0] - start[0];
+        
+        // Calculate perpendicular vector (rotate 90 degrees)
+        const perpX = -dy;
+        const perpY = dx;
+        
+        // Normalize
+        const length = Math.sqrt(perpX * perpX + perpY * perpY);
+        const normX = perpX / length;
+        const normY = perpY / length;
+        
+        // Calculate the point along the line
+        const alongX = start[1] + dx * percentage;
+        const alongY = start[0] + dy * percentage;
+        
+        // Apply offset
+        return [
+            alongY + normY * offsetDegrees,
+            alongX + normX * offsetDegrees
+        ];
+    }
+
     const MODE_COLORS = {
         'U-Bahn': '#0065AE',
         'S-Bahn': '#4EBE3F',
@@ -181,7 +210,7 @@ document.addEventListener('DOMContentLoaded', () => {
         'WALK':   '#777777'
     };
 
-    const prepareLegLayer = async (leg) => {
+    const prepareLegLayer = async (leg, legIndex, allLegs) => {
         const points = leg.points;
         const latLngs = points.map(p => [p.lat, p.lon]);
 
@@ -192,6 +221,10 @@ document.addEventListener('DOMContentLoaded', () => {
         let line = null;
         let distance = 0;
         let routeGeometry = [];
+
+        // Get destination stop name for this leg
+        const destinationStop = points[points.length - 1];
+        const destinationName = destinationStop.name || `Stop ${destinationStop.id}`;
 
         // 1. Walking: Use OSRM walking profile for realistic pedestrian routes
         if (leg.mode === 'WALK') {
@@ -260,29 +293,40 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
-        // Create distance label
+        // Create distance label with offset from the path
         let label = null;
         if (routeGeometry.length > 0) {
-            // Find midpoint for label placement
-            const midIndex = Math.floor(routeGeometry.length / 2);
-            const midpoint = routeGeometry[midIndex];
-            
+            // Calculate a point that's offset from the path
+            let labelPoint;
+            if (routeGeometry.length >= 2) {
+                // Use 40% along the path and offset by ~20 meters
+                const start = routeGeometry[0];
+                const end = routeGeometry[routeGeometry.length - 1];
+                labelPoint = calculateOffsetPoint(start, end, 0.4, 20);
+            } else {
+                // Fallback to midpoint if we don't have enough points
+                const midIndex = Math.floor(routeGeometry.length / 2);
+                labelPoint = routeGeometry[midIndex];
+            }
+
             let labelText = '';
             if (leg.mode === 'WALK') {
-                labelText = `Walk: ${formatDistance(distance)}`;
+                labelText = `Walk: ${formatDistance(distance)} to ${destinationName}`;
             } else {
-                labelText = `${leg.route || leg.mode}: ${formatDistance(distance)}`;
+                labelText = `${leg.route || leg.mode}: ${formatDistance(distance)} to ${destinationName}`;
             }
 
             // Create a custom div icon for the label
-            label = L.marker(midpoint, {
+            // Create a custom div icon for the label
+            label = L.marker(labelPoint, {
                 icon: L.divIcon({
                     className: 'route-label',
                     html: `<div class="route-label-inner">${labelText}</div>`,
-                    iconSize: [120, 30],
-                    iconAnchor: [60, 15]
+                    iconSize: [200, 35], // Increased from [160, 30] to accommodate longer text
+                    iconAnchor: [100, 17]
                 }),
-                interactive: false
+                interactive: false,
+                zIndexOffset: 1000
             });
         }
 
@@ -292,7 +336,9 @@ document.addEventListener('DOMContentLoaded', () => {
             label: label,
             distance: distance,
             mode: leg.mode,
-            route: leg.route
+            route: leg.route,
+            destinationName: destinationName,
+            points: points
         };
     };
 
@@ -317,7 +363,8 @@ document.addEventListener('DOMContentLoaded', () => {
             if (data.legs) {
                 setStatus('Drawing map...', 'idle');
 
-                const promises = data.legs.map(leg => prepareLegLayer(leg));
+                // Pass leg index and all legs to prepareLegLayer for context
+                const promises = data.legs.map((leg, index) => prepareLegLayer(leg, index, data.legs));
                 const results = await Promise.all(promises);
 
                 // Calculate total distance
@@ -328,7 +375,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     result.line.addTo(map);
                     activeLayers.push(result.line);
 
-                    // Add the distance label
+                    // Add the distance label (with destination)
                     if (result.label) {
                         result.label.addTo(map);
                         activeLayers.push(result.label);
@@ -341,40 +388,56 @@ document.addEventListener('DOMContentLoaded', () => {
                             color: '#000', 
                             fillColor: '#fff', 
                             fillOpacity: 1
-                        }).addTo(map).bindTooltip(result.mode);
+                        }).addTo(map).bindTooltip(`${result.mode} to ${result.destinationName}`);
                         activeLayers.push(marker);
                     }
                 });
 
                 // Add start and end markers
                 const startMarker = L.circleMarker([selectedStart.lat, selectedStart.lon], {
-                    radius: 6, 
+                    radius: 8, 
                     color: '#000', 
                     fillColor: '#4CAF50', 
-                    fillOpacity: 1
-                }).addTo(map).bindTooltip("Start: " + selectedStart.stop_name);
+                    fillOpacity: 1,
+                    weight: 2
+                }).addTo(map).bindTooltip(`Start: ${selectedStart.stop_name}`, { permanent: false, direction: 'top' });
                 activeLayers.push(startMarker);
 
                 const endMarker = L.circleMarker([selectedEnd.lat, selectedEnd.lon], {
-                    radius: 6, 
+                    radius: 8, 
                     color: '#000', 
                     fillColor: '#F44336', 
-                    fillOpacity: 1
-                }).addTo(map).bindTooltip("End: " + selectedEnd.stop_name);
+                    fillOpacity: 1,
+                    weight: 2
+                }).addTo(map).bindTooltip(`End: ${selectedEnd.stop_name}`, { permanent: false, direction: 'top' });
                 activeLayers.push(endMarker);
 
                 setStatus(`Route found! Total distance: ${formatDistance(totalDistance)}`, 'success');
 
-                // Fit bounds to show entire route
+                // Fit bounds to show entire route with padding
                 const allPts = data.legs.flatMap(l => l.points.map(p => [p.lat, p.lon]));
-                map.fitBounds(allPts, { padding: [50, 50] });
+                const bounds = L.latLngBounds(allPts);
+                map.fitBounds(bounds, { padding: [60, 60] });
 
-                // Update route summary
+                // Update route summary with detailed information including destinations
                 routeSummary.innerHTML = `
-                    <div><strong>Total Distance:</strong> ${formatDistance(totalDistance)}</div>
-                    ${data.legs.map((leg, index) => 
-                        `<div><strong>${leg.mode}</strong>${leg.route ? ` (${leg.route})` : ''}: ${results[index] ? formatDistance(results[index].distance) : 'calculating...'}</div>`
-                    ).join('')}
+                    <div class="route-summary-header">
+                        <strong>Total Distance: ${formatDistance(totalDistance)}</strong>
+                    </div>
+                    ${results.map((result, index) => {
+                        const leg = data.legs[index];
+                        if (result.mode === 'WALK') {
+                            return `<div class="route-leg">
+                                <span class="leg-mode walk">🚶 Walk</span>
+                                <span class="leg-details">${formatDistance(result.distance)} to ${result.destinationName}</span>
+                            </div>`;
+                        } else {
+                            return `<div class="route-leg">
+                                <span class="leg-mode transit">${getTransportIcon(result.mode)} ${result.mode}${result.route ? ` ${result.route}` : ''}</span>
+                                <span class="leg-details">${formatDistance(result.distance)} to ${result.destinationName}</span>
+                            </div>`;
+                        }
+                    }).join('')}
                 `;
                 routeSummary.classList.remove('hidden');
             } else if (data.error) {
@@ -388,6 +451,17 @@ document.addEventListener('DOMContentLoaded', () => {
             findPathBtn.textContent = 'Draw route';
         }
     };
+
+    // Helper function to get transport icons
+    function getTransportIcon(mode) {
+        const icons = {
+            'U-Bahn': '🚇',
+            'S-Bahn': '🚆',
+            'Tram': '🚋',
+            'Bus': '🚌'
+        };
+        return icons[mode] || '🚗';
+    }
 
     findPathBtn.addEventListener('click', handleRoute);
     updateButtonState(); // Initialize button state
