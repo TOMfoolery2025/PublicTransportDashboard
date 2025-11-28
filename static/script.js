@@ -382,11 +382,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const html = `
                 <div class="stop-popup">
                     <div class="stop-popup__name">${data.stop_name || 'Stop'}</div>
-                    <div class="stop-popup__meta">ID: ${data.stop_id}</div>
-                    ${distance ? `<div class="stop-popup__meta">${distance}</div>` : ''}
-                    <div class="stop-popup__coords">${data.lat.toFixed(5)}, ${data.lon.toFixed(5)}</div>
                     <div class="stop-popup__section">
-                        <div class="stop-popup__section-title">Upcoming departures</div>
+                        <div class="stop-popup__section-title">Upcoming departures:</div>
                         ${departuresHtml}
                     </div>
                 </div>
