@@ -31,6 +31,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let startMarker = null;
     let endMarker = null;
     let hasBuiltRoute = false;
+    let transportRouteActive = false;
     let mapPinMode = null;
 
     // Initial stop dots (only show after a zoom threshold to keep map clean)
@@ -317,7 +318,39 @@ document.addEventListener('DOMContentLoaded', () => {
         }
         updateButtonState();
         hasBuiltRoute = false;
-        setStatus('Cleared route overlay', 'idle');
+        transportRouteActive = false;
+        setStatus('Cleared route overlay and pins', 'idle');
+    }
+
+    function clearTransportRoute() {
+        if (activeRouteLayer) {
+            map.removeLayer(activeRouteLayer);
+            activeRouteLayer = null;
+        }
+        transportRouteActive = false;
+    }
+
+    function clearConstructedRoute() {
+        if (activeLayers && activeLayers.length) {
+            activeLayers.forEach(l => {
+                if (map.hasLayer(l)) map.removeLayer(l);
+            });
+            activeLayers = [];
+        }
+        if (startMarker) {
+            map.removeLayer(startMarker);
+            startMarker = null;
+        }
+        if (endMarker) {
+            map.removeLayer(endMarker);
+            endMarker = null;
+        }
+        if (routeSummary) {
+            routeSummary.innerHTML = '';
+            routeSummary.classList.add('hidden');
+        }
+        hasBuiltRoute = false;
+        updateButtonState();
     }
 
     function setSelection(type, location) {
@@ -344,6 +377,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Initialize autocomplete for both inputs
     setupAutocomplete(startInput, startResults, (location) => {
         setSelection('start', location);
+        transportRouteActive = false;
         mapPinMode = null;
     });
     
@@ -366,7 +400,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function handleMapClick(e) {
-        // Only handle pin placement if in pin mode, don't clear route on click
+        // If a route (constructed or transport) is active, clear it and pins
+        if (hasBuiltRoute || transportRouteActive) {
+            clearRouteOverlays();
+            return;
+        }
+
+        // Only handle pin placement if in pin mode
         if (!mapPinMode) return;
         
         const target = mapPinMode;
@@ -555,9 +595,11 @@ document.addEventListener('DOMContentLoaded', () => {
             
             if (isBusRoute) {
                 // For bus routes, use OSRM to get proper road geometry
+                clearConstructedRoute();
                 await drawRouteWithOSRM(routeName, data.segments, data.stops || [], routeColor);
             } else {
                 // For rail routes (U-Bahn, S-Bahn, Tram), use straight lines
+                clearConstructedRoute();
                 await drawRouteStraight(routeName, data.segments, data.stops || [], routeColor);
             }
         } catch (err) {
@@ -609,6 +651,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (routeGeometry.length) {
                     map.fitBounds(routeGeometry, { padding: [40, 40] });
                 }
+                transportRouteActive = true;
                 setStatus(`Showing bus route ${routeName} (following roads)`, 'success');
             } else {
                 // Fallback to straight lines if OSRM fails
@@ -640,8 +683,9 @@ document.addEventListener('DOMContentLoaded', () => {
         const allPts = polylines.flat();
         if (allPts.length) {
             map.fitBounds(allPts, { padding: [40, 40] });
-            }
-            setStatus(`Showing route ${routeName}`, 'success');
+        }
+        transportRouteActive = true;
+        setStatus(`Showing route ${routeName}`, 'success');
     }
 
     async function drawTripRoute(tripId, routeName) {
@@ -670,6 +714,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
             if (isBusRoute && coords.length >= 2) {
                 // For bus trips, use OSRM
+                clearConstructedRoute();
                 await drawTripWithOSRM(tripId, routeName, coords, data.stops, routeColor);
             } else {
                 // For rail trips, use straight lines
@@ -685,6 +730,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (coords.length) {
                     map.fitBounds(coords, { padding: [40, 40] });
                 }
+                transportRouteActive = true;
                 setStatus(`Showing trip ${tripId}${routeName ? ` (${routeName})` : ''}`, 'success');
             }
         } catch (err) {
@@ -1043,6 +1089,9 @@ document.addEventListener('DOMContentLoaded', () => {
             setStatus('Please select both start and destination locations', 'error');
             return;
         }
+
+        // Hide any transport route currently shown
+        clearTransportRoute();
 
         // Clear previous route layers (keep pinned markers)
         activeLayers = activeLayers.filter(l => l !== startMarker && l !== endMarker);
