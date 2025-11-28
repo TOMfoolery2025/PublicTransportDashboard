@@ -30,6 +30,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let activeSelection = 'start';
     let startMarker = null;
     let endMarker = null;
+    let hasBuiltRoute = false;
     let mapPinMode = null;
 
     // Initial stop dots (only show after a zoom threshold to keep map clean)
@@ -246,6 +247,39 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    function clearRouteOverlays() {
+        if (activeRouteLayer) {
+            map.removeLayer(activeRouteLayer);
+            activeRouteLayer = null;
+        }
+        if (activeLayers && activeLayers.length) {
+            activeLayers.forEach(l => {
+                if (map.hasLayer(l)) map.removeLayer(l);
+            });
+            activeLayers = [];
+        }
+        if (startMarker) {
+            map.removeLayer(startMarker);
+            startMarker = null;
+        }
+        if (endMarker) {
+            map.removeLayer(endMarker);
+            endMarker = null;
+        }
+        selectedStart = null;
+        selectedEnd = null;
+        mapPinMode = null;
+        if (startInput) startInput.value = '';
+        if (endInput) endInput.value = '';
+        if (routeSummary) {
+            routeSummary.innerHTML = '';
+            routeSummary.classList.add('hidden');
+        }
+        updateButtonState();
+        hasBuiltRoute = false;
+        setStatus('Cleared route overlay and pins', 'idle');
+    }
+
     function setSelection(type, location) {
         const parsed = {
             ...location,
@@ -292,14 +326,12 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function handleMapClick(e) {
-        // First, clear any active route overlay if it exists
-        if (activeRouteLayer && !mapPinMode) {
-            map.removeLayer(activeRouteLayer);
-            activeRouteLayer = null;
-            setStatus('Cleared route overlay', 'idle');
-            return; // Don't proceed to pin mode if we just cleared a route
+        // Clear overlays/pins only if a route has been built
+        if (hasBuiltRoute) {
+            clearRouteOverlays();
+            return;
         }
-        
+
         if (!mapPinMode) return;
         
         const target = mapPinMode;
@@ -1042,8 +1074,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 const bounds = L.latLngBounds(allPts);
                 map.fitBounds(bounds, { padding: [60, 60] });
 
-                drawRouteByName
-
                 // Update route summary
                 // Update route summary with full color matching
                 routeSummary.innerHTML = `
@@ -1069,6 +1099,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     }).join('')}
                 `;
                 routeSummary.classList.remove('hidden');
+                hasBuiltRoute = true;
             } else if (data.error) {
                 setStatus(data.error, 'error');
             }
