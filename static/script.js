@@ -13,9 +13,12 @@ document.addEventListener('DOMContentLoaded', () => {
         attribution: '&copy; OpenStreetMap'
     }).addTo(map);
 
-    // Store selected stops
+    // Store selected stops/locations
     let selectedStart = null;
     let selectedEnd = null;
+    let activeSelection = 'start';
+    let startMarker = null;
+    let endMarker = null;
 
     // Initial Dots
     if (stops.length > 0) {
@@ -33,62 +36,109 @@ document.addEventListener('DOMContentLoaded', () => {
         statusEl.className = `status status--${type}`;
     };
 
-    // Search function for stops
-    function searchStops(query, maxResults = 10) {
+    // Search helpers
+    function searchStops(query, maxResults = 3) {
         if (!query || query.length < 2) return [];
-        
         const lowerQuery = query.toLowerCase();
         return stops
             .filter(stop => 
                 stop.stop_name.toLowerCase().includes(lowerQuery) ||
                 stop.stop_id.toLowerCase().includes(lowerQuery)
             )
-            .slice(0, maxResults);
+            .slice(0, maxResults)
+            .map(stop => ({
+                label: stop.stop_name,
+                subtitle: `Transit stop • ${stop.stop_id}`,
+                lat: stop.lat,
+                lon: stop.lon,
+                stop_id: stop.stop_id,
+                source: 'stop'
+            }));
+    }
+
+    async function geocodePlaces(query, maxResults = 5) {
+        if (!query || query.length < 3) return [];
+        try {
+            const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=${maxResults}&q=${encodeURIComponent(query)}`;
+            const res = await fetch(url, { headers: { 'Accept-Language': 'en' } });
+            const data = await res.json();
+            return (data || []).map(place => ({
+                label: place.display_name,
+                subtitle: place.type ? place.type.replace(/_/g, ' ') : 'Address',
+                lat: parseFloat(place.lat),
+                lon: parseFloat(place.lon),
+                source: 'address'
+            }));
+        } catch (e) {
+            console.warn('Geocoding failed', e);
+            return [];
+        }
+    }
+
+    async function searchLocations(query) {
+        const [geocoded, stopMatches] = await Promise.all([
+            geocodePlaces(query),
+            Promise.resolve(searchStops(query))
+        ]);
+        return [...geocoded, ...stopMatches];
     }
 
     // Display search results
     function showResults(input, results, resultsContainer, onSelect) {
         resultsContainer.innerHTML = '';
         
-        if (results.length === 0 && input.value.length >= 2) {
+        if (results.length === 0 && input.value.length >= 3) {
             const noResult = document.createElement('div');
             noResult.className = 'autocomplete-item';
-            noResult.textContent = 'No stops found';
+            noResult.textContent = 'No places found';
             resultsContainer.appendChild(noResult);
             return;
         }
         
-        results.forEach(stop => {
-            const item = document.createElement('div');
-            item.className = 'autocomplete-item';
-            item.innerHTML = `
-                <strong>${stop.stop_name}</strong>
-                <small>ID: ${stop.stop_id}</small>
+        results.forEach(item => {
+            const resultEl = document.createElement('div');
+            resultEl.className = 'autocomplete-item';
+            resultEl.innerHTML = `
+                <strong>${item.label}</strong>
+                ${item.subtitle ? `<small>${item.subtitle}</small>` : ''}
             `;
-            item.addEventListener('click', () => {
-                input.value = stop.stop_name;
+            resultEl.addEventListener('click', () => {
+                input.value = item.label;
                 resultsContainer.innerHTML = '';
-                onSelect(stop);
+                onSelect(item);
             });
-            resultsContainer.appendChild(item);
+            resultsContainer.appendChild(resultEl);
         });
     }
 
     // Setup autocomplete for an input
     function setupAutocomplete(input, resultsContainer, onSelect) {
         let currentResults = [];
+        let debounceHandle = null;
+        
+        const performSearch = async (query) => {
+            currentResults = await searchLocations(query);
+            showResults(input, currentResults, resultsContainer, onSelect);
+        };
         
         input.addEventListener('input', (e) => {
-            const query = e.target.value;
-            currentResults = searchStops(query);
-            showResults(input, currentResults, resultsContainer, onSelect);
+            const query = e.target.value.trim();
+            clearTimeout(debounceHandle);
+
+            if (query.length < 3) {
+                resultsContainer.innerHTML = '';
+                currentResults = [];
+                return;
+            }
+
+            debounceHandle = setTimeout(() => performSearch(query), 250);
         });
         
         input.addEventListener('focus', () => {
-            if (input.value.length >= 2) {
-                currentResults = searchStops(input.value);
-                showResults(input, currentResults, resultsContainer, onSelect);
+            if (input.value.trim().length >= 3) {
+                performSearch(input.value.trim());
             }
+            activeSelection = input.id === 'start-stop' ? 'start' : 'end';
         });
         
         // Hide results when clicking outside
@@ -108,25 +158,83 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // Initialize autocomplete for both inputs
-    setupAutocomplete(startInput, startResults, (stop) => {
-        selectedStart = stop;
+    function setMarker(type, location) {
+        const latLng = [location.lat, location.lon];
+        const markerOptions = {
+            radius: 8,
+            color: '#000',
+            fillOpacity: 1,
+            weight: 2
+        };
+        if (type === 'start') {
+            if (startMarker) map.removeLayer(startMarker);
+            startMarker = L.circleMarker(latLng, { ...markerOptions, fillColor: '#4CAF50' })
+                .addTo(map)
+                .bindTooltip(`Start: ${location.label || location.stop_name || 'Pinned start'}`);
+        } else {
+            if (endMarker) map.removeLayer(endMarker);
+            endMarker = L.circleMarker(latLng, { ...markerOptions, fillColor: '#F44336' })
+                .addTo(map)
+                .bindTooltip(`End: ${location.label || location.stop_name || 'Pinned destination'}`);
+        }
+    }
+
+    function setSelection(type, location) {
+        const parsed = {
+            ...location,
+            lat: parseFloat(location.lat),
+            lon: parseFloat(location.lon)
+        };
+
+        if (type === 'start') {
+            selectedStart = parsed;
+            startInput.value = location.label || location.stop_name || startInput.value;
+            setMarker('start', parsed);
+            activeSelection = 'end';
+        } else {
+            selectedEnd = parsed;
+            endInput.value = location.label || location.stop_name || endInput.value;
+            setMarker('end', parsed);
+            activeSelection = 'start';
+        }
         updateButtonState();
+    }
+
+    // Initialize autocomplete for both inputs
+    setupAutocomplete(startInput, startResults, (location) => {
+        setSelection('start', location);
     });
     
-    setupAutocomplete(endInput, endResults, (stop) => {
-        selectedEnd = stop;
-        updateButtonState();
+    setupAutocomplete(endInput, endResults, (location) => {
+        setSelection('end', location);
     });
 
     // Update button state based on selection
     function updateButtonState() {
-        if (selectedStart && selectedEnd) {
+        if (
+            selectedStart && selectedEnd &&
+            selectedStart.lat != null && selectedStart.lon != null &&
+            selectedEnd.lat != null && selectedEnd.lon != null
+        ) {
             findPathBtn.disabled = false;
         } else {
             findPathBtn.disabled = true;
         }
     }
+
+    function handleMapClick(e) {
+        const target = activeSelection || (!selectedStart ? 'start' : 'end');
+        const location = {
+            label: `Pinned location (${e.latlng.lat.toFixed(5)}, ${e.latlng.lng.toFixed(5)})`,
+            lat: e.latlng.lat,
+            lon: e.latlng.lng,
+            source: 'pin'
+        };
+        setSelection(target, location);
+        setStatus(`Pinned ${target} location on map`, 'idle');
+    }
+
+    map.on('click', handleMapClick);
 
     function decodePolyline(str, precision) {
         var index = 0, lat = 0, lng = 0, coordinates = [], shift = 0, result = 0, byte = null, latitude_change, longitude_change, factor = Math.pow(10, precision || 5);
@@ -363,11 +471,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const handleRoute = async () => {
         if (!selectedStart || !selectedEnd) {
-            setStatus('Please select both start and destination stops', 'error');
+            setStatus('Please select both start and destination locations', 'error');
             return;
         }
 
-        // Clear previous
+        // Clear previous route layers (keep pinned markers)
+        activeLayers = activeLayers.filter(l => l !== startMarker && l !== endMarker);
         activeLayers.forEach(l => map.removeLayer(l));
         activeLayers = [];
 
@@ -376,7 +485,21 @@ document.addEventListener('DOMContentLoaded', () => {
         findPathBtn.disabled = true;
 
         try {
-            const res = await fetch(`/api/path?start=${encodeURIComponent(selectedStart.stop_id)}&end=${encodeURIComponent(selectedEnd.stop_id)}`);
+            const params = new URLSearchParams();
+            if (selectedStart.stop_id) params.set('start', selectedStart.stop_id);
+            if (selectedEnd.stop_id) params.set('end', selectedEnd.stop_id);
+            if (selectedStart.lat != null && selectedStart.lon != null) {
+                params.set('start_lat', selectedStart.lat);
+                params.set('start_lon', selectedStart.lon);
+            }
+            if (selectedEnd.lat != null && selectedEnd.lon != null) {
+                params.set('end_lat', selectedEnd.lat);
+                params.set('end_lon', selectedEnd.lon);
+            }
+            if (selectedStart.label) params.set('start_label', selectedStart.label);
+            if (selectedEnd.label) params.set('end_label', selectedEnd.label);
+
+            const res = await fetch(`/api/path?${params.toString()}`);
             const data = await res.json();
 
             if (data.legs) {
@@ -409,25 +532,6 @@ document.addEventListener('DOMContentLoaded', () => {
                         activeLayers.push(marker);
                     }
                 });
-
-                // Add start and end markers
-                const startMarker = L.circleMarker([selectedStart.lat, selectedStart.lon], {
-                    radius: 8,
-                    color: '#000',
-                    fillColor: '#4CAF50',
-                    fillOpacity: 1,
-                    weight: 2
-                }).addTo(map).bindTooltip(`Start: ${selectedStart.stop_name}`, { permanent: false, direction: 'top' });
-                activeLayers.push(startMarker);
-
-                const endMarker = L.circleMarker([selectedEnd.lat, selectedEnd.lon], {
-                    radius: 8,
-                    color: '#000',
-                    fillColor: '#F44336',
-                    fillOpacity: 1,
-                    weight: 2
-                }).addTo(map).bindTooltip(`End: ${selectedEnd.stop_name}`, { permanent: false, direction: 'top' });
-                activeLayers.push(endMarker);
 
                 setStatus(`Route found! Total distance: ${formatDistance(totalDistance)}`, 'success');
 

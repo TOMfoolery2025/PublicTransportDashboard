@@ -17,21 +17,21 @@
         <header class="hero">
             <div class="hero__text">
                 <p class="eyebrow">Munich Transit</p>
-                <h1>Find the quickest hop between any two stops.</h1>
-                <p class="subhead">Type the names of your origin and destination stops.</p>
+                <h1>Find the quickest hop between any two addresses.</h1>
+                <p class="subhead">Type an address/place or click on the map to pin start and destination.</p>
             </div>
         </header>
 
         <main class="layout">
             <section class="controls-card">
                 <div class="field">
-                    <label for="start-stop">Start stop</label>
-                    <input type="text" id="start-stop" placeholder="Type to search for a stop...">
+                    <label for="start-stop">Start location</label>
+                    <input type="text" id="start-stop" placeholder="Type an address, place, or transit stop...">
                     <div id="start-results" class="autocomplete-results"></div>
                 </div>
                 <div class="field">
                     <label for="end-stop">Destination</label>
-                    <input type="text" id="end-stop" placeholder="Type to search for a stop...">
+                    <input type="text" id="end-stop" placeholder="Type an address, place, or transit stop...">
                     <div id="end-results" class="autocomplete-results"></div>
                 </div>
                 <button id="find-path-btn" class="cta">Draw route</button>

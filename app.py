@@ -56,6 +56,30 @@ def load_all_stops():
 all_stops = load_all_stops()
 
 
+def find_nearest_stop(lat, lon):
+    """Return the closest stop from the cached list with its distance."""
+    closest = None
+    closest_distance = float("inf")
+
+    for stop in all_stops:
+        try:
+            dist = geodesic((lat, lon), (float(stop['lat']), float(stop['lon']))).meters
+        except Exception:
+            continue
+
+        if dist < closest_distance:
+            closest_distance = dist
+            closest = {
+                "stop_id": stop["stop_id"],
+                "name": stop.get("stop_name") or stop.get("name"),
+                "lat": float(stop["lat"]),
+                "lon": float(stop["lon"]),
+                "distance": dist,
+            }
+
+    return closest
+
+
 @app.route('/')
 def index():
     # Center map on Munich
@@ -68,8 +92,34 @@ def get_path():
     start_id = request.args.get("start")
     end_id = request.args.get("end")
 
+    # Optional coordinates coming from geocoded addresses or map clicks
+    start_lat = request.args.get("start_lat", type=float)
+    start_lon = request.args.get("start_lon", type=float)
+    end_lat = request.args.get("end_lat", type=float)
+    end_lon = request.args.get("end_lon", type=float)
+    start_label = request.args.get("start_label")
+    end_label = request.args.get("end_label")
+
+    start_point = None
+    end_point = None
+    nearest_start = None
+    nearest_end = None
+
+    if start_lat is not None and start_lon is not None:
+        start_point = {"lat": start_lat, "lon": start_lon, "name": start_label or "Start"}
+        nearest_start = find_nearest_stop(start_lat, start_lon)
+        start_id = nearest_start["stop_id"] if nearest_start else None
+
+    if end_lat is not None and end_lon is not None:
+        end_point = {"lat": end_lat, "lon": end_lon, "name": end_label or "Destination"}
+        nearest_end = find_nearest_stop(end_lat, end_lon)
+        end_id = nearest_end["stop_id"] if nearest_end else None
+
     if not start_id or not end_id:
-        return jsonify({"error": "start and end are required"}), 400
+        message = "start and end are required"
+        if (start_point and not start_id) or (end_point and not end_id):
+            message = "No nearby transit stop found for the provided locations"
+        return jsonify({"error": message}), 400
 
     query = """
     MATCH (start:Stop {stop_id: $start_id}), (end:Stop {stop_id: $end_id})
@@ -156,14 +206,58 @@ def get_path():
                     if current_final["mode"] == "WALK" and next_leg["mode"] == "WALK":
                         # CRITICAL FIX: Simplify geometry!
                         # Instead of A->B->C, just do A->C
-                        start_point = current_final["points"][0]
-                        end_point = next_leg["points"][-1]
-                        current_final["points"] = [start_point, end_point]
+                        start_pt = current_final["points"][0]
+                        end_pt = next_leg["points"][-1]
+                        current_final["points"] = [start_pt, end_pt]
                     else:
                         final_legs.append(current_final)
                         current_final = next_leg
 
                 final_legs.append(current_final)
+
+            # Prepend/append walk legs for off-network start/end points
+            def add_walk_leg(existing_legs, walk_points, to_start=True):
+                if not walk_points:
+                    return existing_legs
+
+                # Skip microscopic movements
+                try:
+                    leg_dist = geodesic(
+                        (walk_points[0]["lat"], walk_points[0]["lon"]),
+                        (walk_points[-1]["lat"], walk_points[-1]["lon"])
+                    ).meters
+                    if leg_dist < 5:
+                        return existing_legs
+                except Exception:
+                    pass
+
+                walk_leg = {"mode": "WALK", "route": "Walk", "points": walk_points}
+
+                if existing_legs:
+                    if to_start and existing_legs[0]["mode"] == "WALK":
+                        existing_legs[0]["points"] = walk_points[:1] + existing_legs[0]["points"]
+                        return existing_legs
+                    if not to_start and existing_legs[-1]["mode"] == "WALK":
+                        existing_legs[-1]["points"] = existing_legs[-1]["points"] + walk_points[-1:]
+                        return existing_legs
+
+                if to_start:
+                    return [walk_leg] + existing_legs
+                return existing_legs + [walk_leg]
+
+            if start_point and nearest_start:
+                start_walk_points = [
+                    {"lat": start_point["lat"], "lon": start_point["lon"], "name": start_point.get("name", "Start")},
+                    {"lat": nearest_start["lat"], "lon": nearest_start["lon"], "name": nearest_start.get("name"), "id": nearest_start.get("stop_id")},
+                ]
+                final_legs = add_walk_leg(final_legs, start_walk_points, to_start=True)
+
+            if end_point and nearest_end:
+                end_walk_points = [
+                    {"lat": nearest_end["lat"], "lon": nearest_end["lon"], "name": nearest_end.get("name"), "id": nearest_end.get("stop_id")},
+                    {"lat": end_point["lat"], "lon": end_point["lon"], "name": end_point.get("name", "Destination")},
+                ]
+                final_legs = add_walk_leg(final_legs, end_walk_points, to_start=False)
 
             return jsonify({"legs": final_legs})
 
