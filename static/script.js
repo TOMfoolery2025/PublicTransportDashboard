@@ -293,6 +293,25 @@ document.addEventListener('DOMContentLoaded', () => {
 
     map.on('click', handleMapClick);
 
+    function minutesUntil(timeStr) {
+        if (!timeStr) return null;
+        const parts = timeStr.split(':').map(Number);
+        if (parts.length < 2) return null;
+        const now = new Date();
+        const target = new Date(now);
+        target.setHours(parts[0], parts[1], parts[2] || 0, 0);
+        let diffMs = target - now;
+        if (diffMs < 0) diffMs += 24 * 60 * 60 * 1000; // wrap to next day if passed
+        return Math.round(diffMs / 60000);
+    }
+
+    function formatMinutes(mins) {
+        if (mins == null) return '';
+        if (mins < 1) return 'now';
+        if (mins < 90) return `${mins} min`;
+        return `${(mins / 60).toFixed(1)} h`;
+    }
+
     async function openStopPopup(stop, marker) {
         try {
             const res = await fetch(`/api/stops/${encodeURIComponent(stop.stop_id)}`);
@@ -307,10 +326,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const grouped = departures.reduce((acc, d) => {
                 const key = d.route_short_name || 'Route';
                 if (!acc[key]) acc[key] = { times: [], trip_id: d.trip_id };
-                if (acc[key].times.length < 3) {
-                    acc[key].times.push(d.departure_time || '');
-                }
-                // Prefer the first seen trip_id if missing
+                const mins = minutesUntil(d.departure_time);
+                acc[key].times.push({ raw: d.departure_time || '', mins });
                 if (!acc[key].trip_id && d.trip_id) acc[key].trip_id = d.trip_id;
                 return acc;
             }, {});
@@ -319,7 +336,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 ? Object.entries(grouped).map(([route, payload]) => `
                     <div class="stop-popup__departure-group">
                         <button class="route-link" data-route="${route}" data-trip="${payload.trip_id || ''}">${route}</button>
-                        <div class="stop-popup__times">${payload.times.map(t => `<span>${t}</span>`).join('')}</div>
+                        <div class="stop-popup__times">${
+                            payload.times
+                                .sort((a, b) => (a.mins ?? 1e9) - (b.mins ?? 1e9))
+                                .slice(0, 3)
+                                .map((t, idx) => {
+                                    const label = formatMinutes(t.mins) || t.raw;
+                                    const cls = idx === 0 ? 'time-pill time-pill--highlight' : 'time-pill';
+                                    return `<span class="${cls}">${label}</span>`;
+                                }).join('')
+                        }</div>
                     </div>
                 `).join('')
                 : '<div class="stop-popup__meta">No upcoming departures</div>';

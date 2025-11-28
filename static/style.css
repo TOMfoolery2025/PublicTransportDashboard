@@ -365,13 +365,13 @@ body {
 .stop-popup {
     color: #0b1020;
     font-family: 'Manrope', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    min-width: 220px;
+    min-width: 190px;
 }
-.stop-popup__name { font-weight: 700; margin-bottom: 4px; }
+.stop-popup__name { font-weight: 700; margin-bottom: 2px; font-size: 14px; }
 .stop-popup__meta { font-size: 12px; color: #4a566f; }
 .stop-popup__coords { font-size: 12px; color: #4a566f; margin-top: 4px; }
-.stop-popup__section { margin-top: 8px; }
-.stop-popup__section-title { font-weight: 700; font-size: 12px; margin-bottom: 4px; color: #111; }
+.stop-popup__section { margin-top: 6px; }
+.stop-popup__section-title { font-weight: 700; font-size: 12px; margin-bottom: 2px; color: #111; }
 .stop-popup__departure { display: flex; justify-content: space-between; align-items: center; padding: 4px 0; border-bottom: 1px solid rgba(0,0,0,0.08); font-size: 12px; }
 .stop-popup__departure:last-child { border-bottom: none; }
 .stop-popup__departure strong { font-size: 13px; }
@@ -395,7 +395,7 @@ body {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 6px 0;
+    padding: 4px 0;
     border-bottom: 1px solid rgba(0,0,0,0.08);
     gap: 8px;
 }
@@ -411,6 +411,20 @@ body {
     font-weight: 700;
     color: #111;
     font-size: 12px;
+}
+
+.time-pill {
+    background: rgba(255, 255, 255, 0.2);
+    color: #0b1020;
+    padding: 2px 6px;
+    border-radius: 6px;
+    box-shadow: inset 0 0 0 1px rgba(0,0,0,0.08);
+}
+
+.time-pill--highlight {
+    background: rgba(92, 240, 192, 0.25);
+    color: #0f5c3f;
+    box-shadow: inset 0 0 0 1px rgba(92,240,192,0.35);
 }
 
 /* Responsive adjustments for larger screens */
