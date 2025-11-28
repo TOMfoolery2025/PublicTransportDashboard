@@ -452,11 +452,22 @@ document.addEventListener('DOMContentLoaded', () => {
             const coords = data.stops.map(s => [s.lat, s.lon]);
             const routeMode = guessModeFromRouteName(routeName || '');
             const routeColor = modeToColor(routeMode);
-            activeRouteLayer = L.polyline(coords, {
+            activeRouteLayer = L.layerGroup();
+            L.polyline(coords, {
                 color: routeColor,
                 weight: 5,
                 opacity: 0.9
-            }).addTo(map);
+            }).addTo(activeRouteLayer);
+            data.stops.forEach(s => {
+                L.circleMarker([s.lat, s.lon], {
+                    radius: 3,
+                    color: routeColor,
+                    weight: 1.2,
+                    fillColor: '#fff',
+                    fillOpacity: 0.9
+                }).bindTooltip(s.stop_name || s.stop_id).addTo(activeRouteLayer);
+            });
+            activeRouteLayer.addTo(map);
             if (coords.length) {
                 map.fitBounds(coords, { padding: [40, 40] });
             }
