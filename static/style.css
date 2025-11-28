@@ -464,3 +464,41 @@ body {
         padding: 20px;
     }
 }
+
+.bus-route-line {
+    transition: weight 0.2s ease, opacity 0.2s ease;
+}
+
+.bus-route-line:hover {
+    weight: 8;
+    opacity: 1.0;
+}
+
+/* Clear route button styles */
+.leaflet-control-clear {
+    background: #fff;
+    border: 2px solid rgba(0,0,0,0.2);
+    border-radius: 4px;
+    width: 30px;
+    height: 30px;
+    line-height: 26px;
+    text-align: center;
+    text-decoration: none;
+    color: #333;
+    font-size: 18px;
+    font-weight: bold;
+    display: block;
+    cursor: pointer;
+    box-shadow: 0 1px 5px rgba(0,0,0,0.4);
+}
+
+.leaflet-control-clear:hover {
+    background: #f4f4f4;
+    color: #000;
+    border-color: rgba(0,0,0,0.3);
+}
+
+/* Make sure it doesn't conflict with other controls */
+.leaflet-control-clear {
+    margin-bottom: 10px;
+}

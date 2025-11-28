@@ -278,7 +278,16 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function handleMapClick(e) {
+        // First, clear any active route overlay if it exists
+        if (activeRouteLayer && !mapPinMode) {
+            map.removeLayer(activeRouteLayer);
+            activeRouteLayer = null;
+            setStatus('Cleared route overlay', 'idle');
+            return; // Don't proceed to pin mode if we just cleared a route
+        }
+        
         if (!mapPinMode) return;
+        
         const target = mapPinMode;
         const location = {
             label: `Pinned location (${e.latlng.lat.toFixed(5)}, ${e.latlng.lng.toFixed(5)})`,
@@ -291,6 +300,32 @@ document.addEventListener('DOMContentLoaded', () => {
         mapPinMode = null;
     }
 
+    map.on('click', function(e) {
+        handleMapClick(e);
+    });
+
+    
+
+    // Function to clear the route overlay
+    function clearRouteOverlay() {
+        if (activeRouteLayer) {
+            map.removeLayer(activeRouteLayer);
+            activeRouteLayer = null;
+            setStatus('Cleared route overlay', 'idle');
+        } else {
+            setStatus('No route overlay to clear', 'idle');
+        }
+    }
+
+    // Add keyboard shortcut for clearing route (Escape key)
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape' && activeRouteLayer) {
+            clearRouteOverlay();
+        }
+    });
+
+
+    
     map.on('click', handleMapClick);
 
     function minutesUntil(timeStr) {
@@ -375,33 +410,102 @@ document.addEventListener('DOMContentLoaded', () => {
                 map.removeLayer(activeRouteLayer);
                 activeRouteLayer = null;
             }
+            
             const res = await fetch(`/api/route/${encodeURIComponent(routeName)}`);
             const data = await res.json();
             if (!res.ok || !data.segments || !data.segments.length) {
                 setStatus(`No geometry for route ${routeName}`, 'error');
                 return;
             }
-            const polylines = data.segments.map(seg => {
-                return [[seg.from.lat, seg.from.lon], [seg.to.lat, seg.to.lon]];
-            });
-            activeRouteLayer = L.layerGroup();
-            polylines.forEach(coords => {
-                L.polyline(coords, {
-                    color: '#e53935',
-                    weight: 4,
-                    opacity: 0.9
-                }).addTo(activeRouteLayer);
-            });
-            activeRouteLayer.addTo(map);
-            const allPts = polylines.flat();
-            if (allPts.length) {
-                map.fitBounds(allPts, { padding: [40, 40] });
+
+            // Determine if this is a bus route (we'll assume buses follow roads, others get straight lines)
+            const isBusRoute = routeName.match(/^\d/) || routeName.toLowerCase().includes('bus');
+            
+            if (isBusRoute) {
+                // For bus routes, use OSRM to get proper road geometry
+                await drawRouteWithOSRM(routeName, data.segments);
+            } else {
+                // For rail routes (U-Bahn, S-Bahn, Tram), use straight lines
+                await drawRouteStraight(routeName, data.segments);
             }
-            setStatus(`Showing route ${routeName}`, 'success');
         } catch (err) {
             console.warn('Failed to draw route', err);
             setStatus(`Failed to draw route ${routeName}`, 'error');
         }
+    }
+
+    async function drawRouteWithOSRM(routeName, segments) {
+        try {
+            // Extract all unique coordinates from segments
+            const allCoords = [];
+            segments.forEach(seg => {
+                allCoords.push([seg.from.lat, seg.from.lon]);
+                allCoords.push([seg.to.lat, seg.to.lon]);
+            });
+
+            // Remove duplicates (simple approach - in production you might want more sophisticated deduplication)
+            const uniqueCoords = Array.from(new Set(allCoords.map(JSON.stringify))).map(JSON.parse);
+            
+            // Sort coordinates to create a logical route order (nearest neighbor approach)
+            const sortedCoords = sortCoordinatesByProximity(uniqueCoords);
+            
+            if (sortedCoords.length < 2) {
+                await drawRouteStraight(routeName, segments);
+                return;
+            }
+
+            // Convert to OSRM format: "lon,lat;lon,lat;..."
+            const osrmCoords = sortedCoords.map(coord => `${coord[1]},${coord[0]}`).join(';');
+            const url = `https://routing.openstreetmap.de/routed-car/route/v1/driving/${osrmCoords}?overview=full&geometries=polyline`;
+
+            const res = await fetch(url);
+            const data = await res.json();
+
+            if (data.routes && data.routes.length > 0) {
+                const routeGeometry = decodePolyline(data.routes[0].geometry, 5);
+                activeRouteLayer = L.polyline(routeGeometry, {
+                    color: '#582C83', // Bus purple
+                    weight: 6,
+                    opacity: 0.9,
+                    className: 'bus-route-line'
+                }).addTo(map);
+
+                // Fit bounds to the OSRM route
+                if (routeGeometry.length) {
+                    map.fitBounds(routeGeometry, { padding: [40, 40] });
+                }
+                setStatus(`Showing bus route ${routeName} (following roads)`, 'success');
+            } else {
+                // Fallback to straight lines if OSRM fails
+                console.warn('OSRM failed, falling back to straight lines');
+                await drawRouteStraight(routeName, segments);
+            }
+        } catch (error) {
+            console.warn('OSRM routing failed, using straight lines', error);
+            await drawRouteStraight(routeName, segments);
+        }
+    }
+
+    async function drawRouteStraight(routeName, segments) {
+        const polylines = segments.map(seg => {
+            return [[seg.from.lat, seg.from.lon], [seg.to.lat, seg.to.lon]];
+        });
+        
+        activeRouteLayer = L.layerGroup();
+        polylines.forEach(coords => {
+            L.polyline(coords, {
+                color: '#e53935',
+                weight: 4,
+                opacity: 0.9
+            }).addTo(activeRouteLayer);
+        });
+        activeRouteLayer.addTo(map);
+        
+        const allPts = polylines.flat();
+        if (allPts.length) {
+            map.fitBounds(allPts, { padding: [40, 40] });
+        }
+        setStatus(`Showing route ${routeName}`, 'success');
     }
 
     async function drawTripRoute(tripId, routeName) {
@@ -410,6 +514,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 map.removeLayer(activeRouteLayer);
                 activeRouteLayer = null;
             }
+            
             const res = await fetch(`/api/trip_stops/${encodeURIComponent(tripId)}`);
             const data = await res.json();
             if (!res.ok || !data.stops || !data.stops.length) {
@@ -421,21 +526,122 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 return;
             }
+
             const coords = data.stops.map(s => [s.lat, s.lon]);
-            activeRouteLayer = L.polyline(coords, {
-                color: '#e53935',
-                weight: 5,
-                opacity: 0.9
-            }).addTo(map);
-            if (coords.length) {
-                map.fitBounds(coords, { padding: [40, 40] });
+            const isBusRoute = routeName && (routeName.match(/^\d/) || routeName.toLowerCase().includes('bus'));
+
+            if (isBusRoute && coords.length >= 2) {
+                // For bus trips, use OSRM
+                await drawTripWithOSRM(tripId, routeName, coords);
+            } else {
+                // For rail trips, use straight lines
+                activeRouteLayer = L.polyline(coords, {
+                    color: '#e53935',
+                    weight: 5,
+                    opacity: 0.9
+                }).addTo(map);
+                
+                if (coords.length) {
+                    map.fitBounds(coords, { padding: [40, 40] });
+                }
+                setStatus(`Showing trip ${tripId}${routeName ? ` (${routeName})` : ''}`, 'success');
             }
-            setStatus(`Showing trip ${tripId}${routeName ? ` (${routeName})` : ''}`, 'success');
         } catch (err) {
             console.warn('Failed to draw trip', err);
             setStatus(`Failed to draw trip ${tripId}`, 'error');
         }
     }
+
+    async function drawTripWithOSRM(tripId, routeName, coords) {
+        try {
+            // Convert to OSRM format
+            const osrmCoords = coords.map(coord => `${coord[1]},${coord[0]}`).join(';');
+            const url = `https://routing.openstreetmap.de/routed-car/route/v1/driving/${osrmCoords}?overview=full&geometries=polyline`;
+
+            const res = await fetch(url);
+            const data = await res.json();
+
+            if (data.routes && data.routes.length > 0) {
+                const routeGeometry = decodePolyline(data.routes[0].geometry, 5);
+                activeRouteLayer = L.polyline(routeGeometry, {
+                    color: '#582C83', // Bus purple
+                    weight: 6,
+                    opacity: 0.9,
+                    className: 'bus-route-line'
+                }).addTo(map);
+
+                if (routeGeometry.length) {
+                    map.fitBounds(routeGeometry, { padding: [40, 40] });
+                }
+                setStatus(`Showing bus trip ${tripId} (${routeName}) following roads`, 'success');
+            } else {
+                // Fallback to straight lines
+                activeRouteLayer = L.polyline(coords, {
+                    color: '#582C83',
+                    weight: 5,
+                    opacity: 0.9
+                }).addTo(map);
+                
+                if (coords.length) {
+                    map.fitBounds(coords, { padding: [40, 40] });
+                }
+                setStatus(`Showing bus trip ${tripId} (${routeName})`, 'success');
+            }
+        } catch (error) {
+            console.warn('OSRM routing failed, using straight lines', error);
+            // Fallback to straight lines
+            activeRouteLayer = L.polyline(coords, {
+                color: '#582C83',
+                weight: 5,
+                opacity: 0.9
+            }).addTo(map);
+            
+            if (coords.length) {
+                map.fitBounds(coords, { padding: [40, 40] });
+            }
+            setStatus(`Showing bus trip ${tripId} (${routeName})`, 'success');
+        }
+    }
+
+    // Helper function to sort coordinates by proximity (nearest neighbor)
+    function sortCoordinatesByProximity(coords) {
+        if (coords.length <= 2) return coords;
+        
+        const sorted = [coords[0]];
+        const remaining = [...coords.slice(1)];
+        
+        while (remaining.length > 0) {
+            const lastCoord = sorted[sorted.length - 1];
+            let nearestIndex = 0;
+            let nearestDistance = Number.MAX_VALUE;
+            
+            for (let i = 0; i < remaining.length; i++) {
+                const distance = calculateDistance(lastCoord, remaining[i]);
+                if (distance < nearestDistance) {
+                    nearestDistance = distance;
+                    nearestIndex = i;
+                }
+            }
+            
+            sorted.push(remaining[nearestIndex]);
+            remaining.splice(nearestIndex, 1);
+        }
+        
+        return sorted;
+    }
+
+    // Helper function to calculate distance between two coordinates
+    function calculateDistance(coord1, coord2) {
+        const R = 6371000; // Earth's radius in meters
+        const dLat = (coord2[0] - coord1[0]) * Math.PI / 180;
+        const dLon = (coord2[1] - coord1[1]) * Math.PI / 180;
+        const a = 
+            Math.sin(dLat/2) * Math.sin(dLat/2) +
+            Math.cos(coord1[0] * Math.PI / 180) * Math.cos(coord2[0] * Math.PI / 180) * 
+            Math.sin(dLon/2) * Math.sin(dLon/2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        return R * c;
+    }   
 
     map.on('popupopen', (e) => {
         const popupEl = e.popup.getElement();
@@ -748,6 +954,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 const allPts = data.legs.flatMap(l => l.points.map(p => [p.lat, p.lon]));
                 const bounds = L.latLngBounds(allPts);
                 map.fitBounds(bounds, { padding: [60, 60] });
+
+                drawRouteByName
 
                 // Update route summary
                 // Update route summary with full color matching
