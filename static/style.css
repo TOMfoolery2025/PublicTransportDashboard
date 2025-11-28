@@ -491,7 +491,6 @@ body {
 }
 
 .bus-route-line:hover {
-    weight: 8;
     opacity: 1.0;
 }
 
