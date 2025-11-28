@@ -26,7 +26,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Initial stop dots (only show after a zoom threshold to keep map clean)
     const STOP_VISIBILITY_ZOOM = 15;
     const stopIcon = L.icon({
-        iconUrl: '/assets/Amenity_bus_station.svg',
+        iconUrl: '/static/Amenity_bus_station.svg',
         iconSize: [14, 14],
         iconAnchor: [7, 7]
     });

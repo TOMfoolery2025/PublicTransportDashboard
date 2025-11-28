@@ -4,6 +4,7 @@ from neo4j import GraphDatabase
 from dotenv import load_dotenv
 from geopy.distance import geodesic
 import requests
+from bus_stop_widget import register_bus_stop_widget
 
 
 app = Flask(__name__)
@@ -54,6 +55,7 @@ def load_all_stops():
 
 # Load immediately on start
 all_stops = load_all_stops()
+register_bus_stop_widget(app, all_stops)
 
 
 def find_nearest_stop(lat, lon):
