@@ -530,6 +530,13 @@ document.addEventListener('DOMContentLoaded', () => {
         };
     };
 
+    function hexToRgba(hex, alpha) {
+        const r = parseInt(hex.slice(1, 3), 16);
+        const g = parseInt(hex.slice(3, 5), 16);
+        const b = parseInt(hex.slice(5, 7), 16);
+        return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    }
+
     const handleRoute = async () => {
         if (!selectedStart || !selectedEnd) {
             setStatus('Please select both start and destination locations', 'error');
@@ -598,20 +605,24 @@ document.addEventListener('DOMContentLoaded', () => {
                 map.fitBounds(bounds, { padding: [60, 60] });
 
                 // Update route summary
+                // Update route summary with full color matching
                 routeSummary.innerHTML = `
                     <div class="route-summary-header">
                         <strong>Total Distance: ${formatDistance(totalDistance)}</strong>
                     </div>
                     ${results.map((result, index) => {
                         const leg = data.legs[index];
+                        const color = MODE_COLORS[result.mode] || MODE_COLORS['Bus'];
+                        const bgColor = hexToRgba(color, 0.15); // Convert to rgba for background
+                        
                         if (result.mode === 'WALK') {
                             return `<div class="route-leg">
-                                <span class="leg-mode walk">🚶 Walk</span>
+                                <span class="leg-mode walk" style="color: ${color}; background: ${bgColor}; border-left: 3px solid ${color};">🚶 Walk</span>
                                 <span class="leg-details">${formatDistance(result.distance)} to ${result.destinationName}</span>
                             </div>`;
                         } else {
                             return `<div class="route-leg">
-                                <span class="leg-mode transit">${getTransportIcon(result.mode)} ${result.mode}${result.route ? ` ${result.route}` : ''}</span>
+                                <span class="leg-mode transit" style="color: ${color}; background: ${bgColor}; border-left: 3px solid ${color};">${getTransportIcon(result.mode)} ${result.mode}${result.route ? ` ${result.route}` : ''}</span>
                                 <span class="leg-details">${formatDistance(result.distance)} to ${result.destinationName}</span>
                             </div>`;
                         }
