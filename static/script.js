@@ -177,24 +177,24 @@ document.addEventListener('DOMContentLoaded', () => {
     function calculateOffsetPoint(start, end, percentage, offsetDistance) {
         // Convert offset distance from meters to degrees (approximate)
         const offsetDegrees = offsetDistance / 111000; // Rough conversion
-        
+
         // Calculate the direction vector
         const dx = end[1] - start[1];
         const dy = end[0] - start[0];
-        
+
         // Calculate perpendicular vector (rotate 90 degrees)
         const perpX = -dy;
         const perpY = dx;
-        
+
         // Normalize
         const length = Math.sqrt(perpX * perpX + perpY * perpY);
         const normX = perpX / length;
         const normY = perpY / length;
-        
+
         // Calculate the point along the line
         const alongX = start[1] + dx * percentage;
         const alongY = start[0] + dy * percentage;
-        
+
         // Apply offset
         return [
             alongY + normY * offsetDegrees,
@@ -203,11 +203,11 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     const MODE_COLORS = {
-        'U-Bahn': '#0065AE',
-        'S-Bahn': '#4EBE3F',
-        'Tram':   '#E30613',
-        'Bus':    '#582C83',
-        'WALK':   '#777777'
+        'U-Bahn': '#0065AE', // MVG Blue
+        'S-Bahn': '#4EBE3F', // MVG Green
+        'Tram':   '#E30613', // MVG Red
+        'Bus':    '#582C83', // Purple
+        'WALK':   '#777777'  // Gray
     };
 
     const prepareLegLayer = async (leg, legIndex, allLegs) => {
@@ -217,6 +217,8 @@ document.addEventListener('DOMContentLoaded', () => {
         let color = MODE_COLORS[leg.mode] || MODE_COLORS['Bus'];
         if (leg.mode.includes("Bus")) color = MODE_COLORS['Bus'];
         if (leg.mode.includes("Tram")) color = MODE_COLORS['Tram'];
+        if (leg.mode.includes("U-Bahn")) color = MODE_COLORS['U-Bahn'];
+        if (leg.mode.includes("S-Bahn")) color = MODE_COLORS['S-Bahn'];
 
         let line = null;
         let distance = 0;
@@ -260,8 +262,25 @@ document.addEventListener('DOMContentLoaded', () => {
                     className: 'walking-route'
                 });
             }
-        } 
-        // 2. Transit: Use OSRM driving profile for vehicles
+        }
+
+        // 2. STRATEGY: RAILS AND TRAMS (Straight Line - No OSRM)
+        // We moved Tram here to prevent loops!
+        else if (leg.mode.includes("U-Bahn") || leg.mode.includes("S-Bahn") || leg.mode.includes("Tram")) {
+            // Force straight lines
+            routeGeometry = latLngs;
+            distance = calculatePolylineDistance(latLngs);
+
+            line = L.polyline(latLngs, {
+                color: color,
+                weight: 7,
+                opacity: 1.0,
+                lineCap: 'square', // Transit map style
+                className: 'transit-route'
+            });
+        }
+
+        // 3. STRATEGY: BUS ONLY (Use OSRM Driving)
         else {
             try {
                 const osrmCoords = points.map(p => `${p.lon},${p.lat}`).join(';');
@@ -293,7 +312,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         }
 
-        // Create distance label with offset from the path
+        // Create distance label
         let label = null;
         if (routeGeometry.length > 0) {
             // Calculate a point that's offset from the path
@@ -363,19 +382,17 @@ document.addEventListener('DOMContentLoaded', () => {
             if (data.legs) {
                 setStatus('Drawing map...', 'idle');
 
-                // Pass leg index and all legs to prepareLegLayer for context
-                const promises = data.legs.map((leg, index) => prepareLegLayer(leg, index, data.legs));
+                const promises = data.legs.map(leg => prepareLegLayer(leg));
                 const results = await Promise.all(promises);
 
                 // Calculate total distance
                 const totalDistance = results.reduce((sum, result) => sum + result.distance, 0);
                 
                 results.forEach((result, index) => {
-                    // Add the route line
-                    result.line.addTo(map);
-                    activeLayers.push(result.line);
-
-                    // Add the distance label (with destination)
+                    if(result.line) {
+                        result.line.addTo(map);
+                        activeLayers.push(result.line);
+                    }
                     if (result.label) {
                         result.label.addTo(map);
                         activeLayers.push(result.label);
@@ -395,18 +412,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
                 // Add start and end markers
                 const startMarker = L.circleMarker([selectedStart.lat, selectedStart.lon], {
-                    radius: 8, 
-                    color: '#000', 
-                    fillColor: '#4CAF50', 
+                    radius: 8,
+                    color: '#000',
+                    fillColor: '#4CAF50',
                     fillOpacity: 1,
                     weight: 2
                 }).addTo(map).bindTooltip(`Start: ${selectedStart.stop_name}`, { permanent: false, direction: 'top' });
                 activeLayers.push(startMarker);
 
                 const endMarker = L.circleMarker([selectedEnd.lat, selectedEnd.lon], {
-                    radius: 8, 
-                    color: '#000', 
-                    fillColor: '#F44336', 
+                    radius: 8,
+                    color: '#000',
+                    fillColor: '#F44336',
                     fillOpacity: 1,
                     weight: 2
                 }).addTo(map).bindTooltip(`End: ${selectedEnd.stop_name}`, { permanent: false, direction: 'top' });
@@ -419,7 +436,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 const bounds = L.latLngBounds(allPts);
                 map.fitBounds(bounds, { padding: [60, 60] });
 
-                // Update route summary with detailed information including destinations
+                // Update route summary
                 routeSummary.innerHTML = `
                     <div class="route-summary-header">
                         <strong>Total Distance: ${formatDistance(totalDistance)}</strong>

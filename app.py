@@ -120,7 +120,7 @@ def get_path():
                     p2 = leg["points"][1]
                     try:
                         dist = geodesic((p1['lat'], p1['lon']), (p2['lat'], p2['lon'])).meters
-                        if dist < 1000:
+                        if dist < 500:
                             leg["mode"] = "WALK"
                             leg["route"] = "Walk"
                     except:
