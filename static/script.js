@@ -535,15 +535,37 @@ document.addEventListener('DOMContentLoaded', () => {
         const stopId = stop.stop_id || stop.id;
         let departures = [];
 
+        // --- REPLACEMENT START ---
         try {
-            const depRes = await fetch(`/api/departures/${encodeURIComponent(stopId)}`);
+            // 1. Fetch from the external API directly
+            const url = `https://civiguild.com/api/departures/${encodeURIComponent(stopId)}`;
+
+            // Note: If you see a "CORS" or "Network Error" in your browser console,
+            // the external server is blocking the browser request.
+            const depRes = await fetch(url);
+
             if (depRes.ok) {
-                const depData = await depRes.json();
-                departures = Array.isArray(depData) ? depData : [];
+                const rawData = await depRes.json();
+
+                // 2. Process the data matching your specific JSON structure
+                if (Array.isArray(rawData)) {
+                    departures = rawData
+                        .slice(0, 10) // Limit to 10
+                        .map(item => ({
+                            // Map the fields exactly as they appear in your JSON
+                            route_short_name: item.route_short_name, // e.g. "U5"
+                            trip_id: item.trip_id,                   // e.g. 812427
+                            departure_timestamp: item.departure_timestamp, // e.g. 1764367470
+                            delay: item.delay || 0                   // e.g. 0
+                        }));
+                }
+            } else {
+                console.error("API returned status:", depRes.status);
             }
         } catch (err) {
-            console.warn('Departures fetch failed', err);
+            console.error('Departures fetch failed. If this is a CORS error, you must use a backend proxy.', err);
         }
+        // --- REPLACEMENT END ---
 
         const grouped = departures.reduce((acc, d) => {
             const key = d.route_short_name || 'Route';
