@@ -25,16 +25,20 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Initial stop dots (only show after a zoom threshold to keep map clean)
     const STOP_VISIBILITY_ZOOM = 15;
+    const stopIcon = L.icon({
+        iconUrl: '/assets/Amenity_bus_station.svg',
+        iconSize: [14, 14],
+        iconAnchor: [7, 7]
+    });
     const stopsLayer = L.layerGroup();
     if (stops.length > 0) {
         stops.forEach(s => {
-            L.circleMarker([s.lat, s.lon], {
-                radius: 2,
-                color: '#444',
-                weight: 0.5,
-                fillColor: '#fff',
-                fillOpacity: 0.5
-            }).bindTooltip(s.stop_name).addTo(stopsLayer);
+            const marker = L.marker([s.lat, s.lon], {
+                icon: stopIcon,
+                keyboard: false
+            }).bindTooltip(s.stop_name);
+            marker.on('click', () => openStopPopup(s, marker));
+            marker.addTo(stopsLayer);
         });
     }
     const updateStopVisibility = () => {
@@ -280,6 +284,31 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     map.on('click', handleMapClick);
+
+    async function openStopPopup(stop, marker) {
+        try {
+            const res = await fetch(`/api/stops/${encodeURIComponent(stop.stop_id)}`);
+            const data = await res.json();
+            if (data.error) throw new Error(data.error);
+
+            const distance = data.distance_from_center_m != null
+                ? `${(data.distance_from_center_m / 1000).toFixed(2)} km from city center`
+                : '';
+
+            const html = `
+                <div class="stop-popup">
+                    <div class="stop-popup__name">${data.stop_name || 'Stop'}</div>
+                    <div class="stop-popup__meta">ID: ${data.stop_id}</div>
+                    ${distance ? `<div class="stop-popup__meta">${distance}</div>` : ''}
+                    <div class="stop-popup__coords">${data.lat.toFixed(5)}, ${data.lon.toFixed(5)}</div>
+                </div>
+            `;
+            marker.bindPopup(html, { closeButton: true }).openPopup();
+        } catch (err) {
+            console.warn('Failed to load stop info', err);
+            marker.bindPopup('<div class="stop-popup">Stop info unavailable</div>').openPopup();
+        }
+    }
 
     startPinBtn.addEventListener('click', () => {
         mapPinMode = 'start';
