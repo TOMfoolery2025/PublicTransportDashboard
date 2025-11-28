@@ -212,21 +212,27 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    const makeMinimalPin = (color) => {
+    // Create custom draggable pin icons
+    const createPinIcon = (color) => {
         const svg = `
-        <svg xmlns='http://www.w3.org/2000/svg' width='18' height='24' viewBox='0 0 18 24'>
-            <path d='M9 22c0-2-6-6-6-12a6 6 0 0 1 12 0c0 6-6 10-6 12Z' fill='${color}' stroke='${color}' stroke-width='2'/>
+        <svg xmlns='http://www.w3.org/2000/svg' width='24' height='36' viewBox='0 0 24 36'>
+            <path d='M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z'
+                  fill='${color}' stroke='#ffffff' stroke-width='2'/>
+            <path d='M12 34L6 22h12l-6 12z' fill='${color}' stroke='#ffffff' stroke-width='1.5'/>
         </svg>`;
         return L.icon({
             iconUrl: 'data:image/svg+xml;utf8,' + encodeURIComponent(svg),
-            iconSize: [18, 24],
-            iconAnchor: [9, 22],
-            tooltipAnchor: [0, -14]
+            iconSize: [24, 36],
+            iconAnchor: [12, 36],
+            tooltipAnchor: [0, -30],
+            shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.7.1/images/marker-shadow.png',
+            shadowSize: [41, 41],
+            shadowAnchor: [12, 41]
         });
     };
 
-    const startPinIcon = makeMinimalPin('#12784f');
-    const endPinIcon = makeMinimalPin('#b12a2a');
+    const startPinIcon = createPinIcon('#12784f');
+    const endPinIcon = createPinIcon('#b12a2a');
 
     function setMarker(type, location) {
         const latLng = [location.lat, location.lon];
@@ -234,17 +240,63 @@ document.addEventListener('DOMContentLoaded', () => {
             ? `Start: ${location.label || location.stop_name || 'Pinned start'}`
             : `End: ${location.label || location.stop_name || 'Pinned destination'}`;
 
+        const markerOptions = {
+            icon: type === 'start' ? startPinIcon : endPinIcon,
+            keyboard: false,
+            draggable: true,
+            autoPan: true,
+            autoPanPadding: [50, 50]
+        };
+
+        const marker = L.marker(latLng, markerOptions)
+            .addTo(map)
+            .bindTooltip(tooltipText, { permanent: false, direction: 'top' })
+            .on('dragstart', function() {
+                this.setZIndexOffset(1000);
+                setStatus(`Dragging ${type} point...`, 'idle');
+            })
+            .on('drag', function(e) {
+                const pos = e.target.getLatLng();
+                e.target.setTooltipContent(`${type === 'start' ? 'Start' : 'End'}: (${pos.lat.toFixed(5)}, ${pos.lng.toFixed(5)})`);
+            })
+            .on('dragend', function(e) {
+                const marker = e.target;
+                const newPosition = marker.getLatLng();
+                
+                // Update the selected location
+                const updatedLocation = {
+                    ...(type === 'start' ? selectedStart : selectedEnd),
+                    lat: newPosition.lat,
+                    lon: newPosition.lng,
+                    label: `Pinned location (${newPosition.lat.toFixed(5)}, ${newPosition.lng.toFixed(5)})`,
+                    source: 'pin'
+                };
+                
+                if (type === 'start') {
+                    selectedStart = updatedLocation;
+                    startInput.value = selectedStart.label;
+                } else {
+                    selectedEnd = updatedLocation;
+                    endInput.value = selectedEnd.label;
+                }
+                
+                marker.setZIndexOffset(0);
+                marker.setTooltipContent(`${type === 'start' ? 'Start' : 'End'}: ${updatedLocation.label}`);
+                
+                // Only update status - no automatic route recalculation
+                setStatus(`${type === 'start' ? 'Start' : 'End'} point moved. Click "Draw route" to recalculate.`, 'idle');
+                updateButtonState();
+            });
+
         if (type === 'start') {
             if (startMarker) map.removeLayer(startMarker);
-            startMarker = L.marker(latLng, { icon: startPinIcon, keyboard: false })
-                .addTo(map)
-                .bindTooltip(`Start: ${location.label || location.stop_name || 'Pinned start'}`);
+            startMarker = marker;
         } else {
             if (endMarker) map.removeLayer(endMarker);
-            endMarker = L.marker(latLng, { icon: endPinIcon, keyboard: false })
-                .addTo(map)
-                .bindTooltip(`End: ${location.label || location.stop_name || 'Pinned destination'}`);
+            endMarker = marker;
         }
+        
+        return marker;
     }
 
     function clearRouteOverlays() {
@@ -258,26 +310,14 @@ document.addEventListener('DOMContentLoaded', () => {
             });
             activeLayers = [];
         }
-        if (startMarker) {
-            map.removeLayer(startMarker);
-            startMarker = null;
-        }
-        if (endMarker) {
-            map.removeLayer(endMarker);
-            endMarker = null;
-        }
-        selectedStart = null;
-        selectedEnd = null;
-        mapPinMode = null;
-        if (startInput) startInput.value = '';
-        if (endInput) endInput.value = '';
+        // Don't remove the markers, only clear the route
         if (routeSummary) {
             routeSummary.innerHTML = '';
             routeSummary.classList.add('hidden');
         }
         updateButtonState();
         hasBuiltRoute = false;
-        setStatus('Cleared route overlay and pins', 'idle');
+        setStatus('Cleared route overlay', 'idle');
     }
 
     function setSelection(type, location) {
@@ -326,12 +366,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function handleMapClick(e) {
-        // Clear overlays/pins only if a route has been built
-        if (hasBuiltRoute) {
-            clearRouteOverlays();
-            return;
-        }
-
+        // Only handle pin placement if in pin mode, don't clear route on click
         if (!mapPinMode) return;
         
         const target = mapPinMode;
@@ -346,26 +381,31 @@ document.addEventListener('DOMContentLoaded', () => {
         mapPinMode = null;
     }
 
-    map.on('click', function(e) {
-        handleMapClick(e);
-    });
+    map.on('click', handleMapClick);
 
-    
-
-    // Function to clear the route overlay
+    // Function to clear the route overlay only (keep pins)
     function clearRouteOverlay() {
         if (activeRouteLayer) {
             map.removeLayer(activeRouteLayer);
             activeRouteLayer = null;
-            setStatus('Cleared route overlay', 'idle');
-        } else {
-            setStatus('No route overlay to clear', 'idle');
         }
+        if (activeLayers && activeLayers.length) {
+            activeLayers.forEach(l => {
+                if (map.hasLayer(l)) map.removeLayer(l);
+            });
+            activeLayers = [];
+        }
+        if (routeSummary) {
+            routeSummary.innerHTML = '';
+            routeSummary.classList.add('hidden');
+        }
+        hasBuiltRoute = false;
+        setStatus('Cleared route overlay', 'idle');
     }
 
     // Add keyboard shortcut for clearing route (Escape key)
     document.addEventListener('keydown', function(e) {
-        if (e.key === 'Escape' && activeRouteLayer) {
+        if (e.key === 'Escape') {
             clearRouteOverlay();
         }
     });

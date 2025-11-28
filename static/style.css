@@ -522,3 +522,27 @@ body {
 .leaflet-control-clear {
     margin-bottom: 10px;
 }
+
+
+.leaflet-marker-dragging {
+    filter: drop-shadow(0 0 12px rgba(0,0,0,0.6));
+    transition: filter 0.2s ease;
+}
+.leaflet-marker-icon {
+    transition: filter 0.2s ease;
+    cursor: grab;
+}
+.leaflet-marker-icon:hover {
+    filter: drop-shadow(0 0 4px rgba(0,0,0,0.3));
+}
+.leaflet-marker-icon:active {
+    cursor: grabbing;
+}
+.recalculating-route {
+    animation: pulse 1.5s infinite;
+}
+@keyframes pulse {
+    0% { opacity: 1; }
+    50% { opacity: 0.7; }
+    100% { opacity: 1; }
+}
