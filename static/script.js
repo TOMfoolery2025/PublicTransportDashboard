@@ -891,11 +891,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 await drawTripWithOSRM(tripId, routeName, coords, stops, routeColor);
             } else {
                 // Straight Lines - For Trams, U-Bahn, S-Bahn
+                // Tag these polylines so clearRouteOverlays() will reliably remove them later
                 activeRouteLayer = L.layerGroup();
                 L.polyline(coords, {
                     color: routeColor,
                     weight: 5,
-                    opacity: 0.9
+                    opacity: 0.9,
+                    className: 'transit-route' // <-- IMPORTANT: tag for sweep removal
                 }).addTo(activeRouteLayer);
                 addStopMarkersToLayer(stops, routeColor);
                 activeRouteLayer.addTo(map);
@@ -911,6 +913,7 @@ document.addEventListener('DOMContentLoaded', () => {
             setStatus(`Failed to draw trip ${tripId}`, 'error');
         }
     }
+
 
 
     async function drawTripWithOSRM(tripId, routeName, coords, stops, color) {
@@ -939,15 +942,14 @@ document.addEventListener('DOMContentLoaded', () => {
                 }
                 setStatus(`Showing bus trip ${tripId} (${routeName}) following roads`, 'success');
             } else {
-                // Fallback to straight lines
-                // --- PATCH: ensure fallback polyline has a className so it can be cleared ---
-                /* inside drawTripWithOSRM catch/fallback: */
+                // Fallback to straight lines (tagged)
+                console.warn('OSRM returned no routes, falling back to straight lines');
                 activeRouteLayer = L.layerGroup();
                 L.polyline(coords, {
                     color: color,
                     weight: 5,
                     opacity: 0.9,
-                    className: 'bus-route-line' // tag so sweep can remove it
+                    className: 'bus-route-line' // <-- tag so sweep can remove it
                 }).addTo(activeRouteLayer);
                 addStopMarkersToLayer(stops, color);
                 activeRouteLayer.addTo(map);
@@ -956,16 +958,16 @@ document.addEventListener('DOMContentLoaded', () => {
                     map.fitBounds(coords, { padding: [40, 40] });
                 }
                 setStatus(`Showing bus trip ${tripId} (${routeName})`, 'success');
-
             }
         } catch (error) {
             console.warn('OSRM routing failed, using straight lines', error);
-            // Fallback to straight lines
+            // Fallback to straight lines but tag it explicitly so clearRouteOverlays() will remove it later
             activeRouteLayer = L.layerGroup();
             L.polyline(coords, {
                 color: color,
                 weight: 5,
-                opacity: 0.9
+                opacity: 0.9,
+                className: 'bus-route-line' // <-- IMPORTANT
             }).addTo(activeRouteLayer);
             addStopMarkersToLayer(stops, color);
             activeRouteLayer.addTo(map);
@@ -976,6 +978,7 @@ document.addEventListener('DOMContentLoaded', () => {
             setStatus(`Showing bus trip ${tripId} (${routeName})`, 'success');
         }
     }
+
 
     // --- NEW helper: ensure previous transport overlays cleared before drawing ---
     function ensureNoActiveTransportRoute() {
