@@ -940,6 +940,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (routeGeometry.length) {
                     map.fitBounds(routeGeometry, { padding: [40, 40] });
                 }
+
+                // Mark that a transport route is active so map clicks/Esc clear it
+                transportRouteActive = true;
                 setStatus(`Showing bus trip ${tripId} (${routeName}) following roads`, 'success');
             } else {
                 // Fallback to straight lines (tagged)
@@ -949,7 +952,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     color: color,
                     weight: 5,
                     opacity: 0.9,
-                    className: 'bus-route-line' // <-- tag so sweep can remove it
+                    className: 'bus-route-line' // tag so sweep can remove it
                 }).addTo(activeRouteLayer);
                 addStopMarkersToLayer(stops, color);
                 activeRouteLayer.addTo(map);
@@ -957,6 +960,9 @@ document.addEventListener('DOMContentLoaded', () => {
                 if (coords.length) {
                     map.fitBounds(coords, { padding: [40, 40] });
                 }
+
+                // Also mark transport route active for fallbacks
+                transportRouteActive = true;
                 setStatus(`Showing bus trip ${tripId} (${routeName})`, 'success');
             }
         } catch (error) {
@@ -967,7 +973,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 color: color,
                 weight: 5,
                 opacity: 0.9,
-                className: 'bus-route-line' // <-- IMPORTANT
+                className: 'bus-route-line' // IMPORTANT: tag it
             }).addTo(activeRouteLayer);
             addStopMarkersToLayer(stops, color);
             activeRouteLayer.addTo(map);
@@ -975,9 +981,13 @@ document.addEventListener('DOMContentLoaded', () => {
             if (coords.length) {
                 map.fitBounds(coords, { padding: [40, 40] });
             }
+
+            // Mark as active so clicks clear the bus route
+            transportRouteActive = true;
             setStatus(`Showing bus trip ${tripId} (${routeName})`, 'success');
         }
     }
+
 
 
     // --- NEW helper: ensure previous transport overlays cleared before drawing ---
