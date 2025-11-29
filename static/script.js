@@ -300,18 +300,48 @@ document.addEventListener('DOMContentLoaded', () => {
         return marker;
     }
 
+    // --- REPLACEMENT: clearRouteOverlays ---
     function clearRouteOverlays() {
+        // 1) Remove tracked layer group
         if (activeRouteLayer) {
-            map.removeLayer(activeRouteLayer);
+            if (map.hasLayer(activeRouteLayer)) map.removeLayer(activeRouteLayer);
             activeRouteLayer = null;
         }
+
+        // 2) Remove any individually-tracked layers
         if (activeLayers && activeLayers.length) {
             activeLayers.forEach(l => {
-                if (map.hasLayer(l)) map.removeLayer(l);
+                try { if (map.hasLayer(l)) map.removeLayer(l); } catch(e) {}
             });
             activeLayers = [];
         }
-        // Don't remove the markers, only clear the route
+
+        // 3) Safety sweep — remove any stray route layers/markers that were added directly and not tracked.
+        // We look for className markers set by our route drawing code or well-known classNames used on polylines.
+        try {
+            map.eachLayer(layer => {
+                try {
+                    const cls = layer && layer.options && layer.options.className;
+                    if (typeof cls === 'string' && /(transit-route|bus-route-line|walking-route|stop-on-route)/.test(cls)) {
+                        if (map.hasLayer(layer)) map.removeLayer(layer);
+                    }
+                    // Additional heuristic: remove polylines with high weight that are unlikely to be user pins
+                    if (layer instanceof L.Polyline) {
+                        const w = layer.options && layer.options.weight;
+                        const hasClass = !!(layer.options && layer.options.className);
+                        if (!hasClass && w && w >= 6) {
+                            // likely a previously drawn transport polyline; remove it
+                            if (map.hasLayer(layer)) map.removeLayer(layer);
+                        }
+                    }
+                } catch (e) { /* ignore per-layer failures */ }
+            });
+        } catch (e) {
+            // Some leaflet builds may throw from iterating; ignore and continue
+            console.warn('Route clearing sweep failed', e);
+        }
+
+        // 4) UI housekeeping (same as before)
         if (routeSummary) {
             routeSummary.innerHTML = '';
             routeSummary.classList.add('hidden');
@@ -321,6 +351,7 @@ document.addEventListener('DOMContentLoaded', () => {
         transportRouteActive = false;
         setStatus('Cleared route overlay and pins', 'idle');
     }
+
 
     function clearTransportRoute() {
         if (activeRouteLayer) {
@@ -446,10 +477,9 @@ document.addEventListener('DOMContentLoaded', () => {
     // Add keyboard shortcut for clearing route (Escape key)
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape') {
-            clearRouteOverlay();
+            clearRouteOverlays();
         }
     });
-
 
     
     map.on('click', handleMapClick);
@@ -507,8 +537,12 @@ document.addEventListener('DOMContentLoaded', () => {
         return color;
     }
 
+    // --- REPLACEMENT: addStopMarkersToLayer ---
     function addStopMarkersToLayer(stops, color) {
-        if (!stops || !stops.length || !activeRouteLayer) return;
+        if (!stops || !stops.length) return;
+        // If an activeRouteLayer exists, put markers into it; otherwise create a temporary layer and track markers
+        const targetLayer = activeRouteLayer || L.layerGroup();
+
         stops.forEach(s => {
             const lat = s.lat ?? s.stop_lat;
             const lon = s.lon ?? s.stop_lon;
@@ -518,17 +552,30 @@ document.addEventListener('DOMContentLoaded', () => {
                 color: color,
                 weight: 1.2,
                 fillColor: '#fff',
-                fillOpacity: 0.9
+                fillOpacity: 0.9,
+                className: 'stop-on-route' // tag so clearing sweep can find it
             }).bindTooltip(s.name || s.stop_name || s.id || s.stop_id || 'Stop');
+
             marker.on('click', () => openStopPopup({
                 stop_id: s.id || s.stop_id,
                 stop_name: s.name || s.stop_name,
                 lat,
                 lon
             }, marker));
-            marker.addTo(activeRouteLayer);
+
+            marker.addTo(targetLayer);
+
+            // Ensure we track these markers for explicit removal if needed
+            activeLayers.push(marker);
         });
+
+        // If we created a temp layer (no activeRouteLayer existed), add it to map and track it
+        if (!activeRouteLayer && targetLayer && targetLayer.getLayers && targetLayer.getLayers().length) {
+            activeRouteLayer = targetLayer;
+            activeRouteLayer.addTo(map);
+        }
     }
+
 
     // --- REPLACED: Full logic for popup with external API & distance calc ---
     async function openStopPopup(stop, marker) {
@@ -682,11 +729,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     async function drawRouteByName(routeName) {
         try {
-            if (activeRouteLayer) {
-                map.removeLayer(activeRouteLayer);
-                activeRouteLayer = null;
-            }
-            
+            // Always remove any previously drawn overlays (keep pinned markers)
+            clearRouteOverlays();
+
             const res = await fetch(`/api/route/${encodeURIComponent(routeName)}`);
             const data = await res.json();
             if (!res.ok || !data.segments || !data.segments.length) {
@@ -702,11 +747,9 @@ document.addEventListener('DOMContentLoaded', () => {
             
             if (isBusRoute) {
                 // For bus routes, use OSRM to get proper road geometry
-                clearConstructedRoute();
                 await drawRouteWithOSRM(routeName, data.segments, data.stops || [], routeColor);
             } else {
                 // For rail routes (U-Bahn, S-Bahn, Tram), use straight lines
-                clearConstructedRoute();
                 await drawRouteStraight(routeName, data.segments, data.stops || [], routeColor);
             }
         } catch (err) {
@@ -714,6 +757,7 @@ document.addEventListener('DOMContentLoaded', () => {
             setStatus(`Failed to draw route ${routeName}`, 'error');
         }
     }
+
 
     async function drawRouteWithOSRM(routeName, segments, stops, color) {
         try {
@@ -771,17 +815,22 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // --- REPLACEMENT: drawRouteStraight ---
     async function drawRouteStraight(routeName, segments, stops, color) {
         const polylines = segments.map(seg => {
             return [[seg.from.lat, seg.from.lon], [seg.to.lat, seg.to.lon]];
         });
         
+        // Ensure any previous overlays are cleared first
+        clearRouteOverlays();
+
         activeRouteLayer = L.layerGroup();
         polylines.forEach(coords => {
             L.polyline(coords, {
                 color: color || '#e53935',
                 weight: 4,
-                opacity: 0.9
+                opacity: 0.9,
+                className: 'transit-route' // tag for easier clearing
             }).addTo(activeRouteLayer);
         });
         addStopMarkersToLayer(stops, color || '#e53935');
@@ -795,13 +844,12 @@ document.addEventListener('DOMContentLoaded', () => {
         setStatus(`Showing route ${routeName}`, 'success');
     }
 
+
     async function drawTripRoute(tripId, routeName) {
         try {
-            if (activeRouteLayer) {
-                map.removeLayer(activeRouteLayer);
-                activeRouteLayer = null;
-            }
-            
+            // Ensure previous overlays are cleared (keep pinned markers)
+            clearRouteOverlays();
+
             // 1. Fetch from External API via Proxy
             const targetUrl = `https://civiguild.com/api/trips/allStops/${encodeURIComponent(tripId)}`;
             const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(targetUrl)}`;
@@ -835,14 +883,11 @@ document.addEventListener('DOMContentLoaded', () => {
             const routeMode = guessModeFromRouteName(routeName || '');
             const routeColor = modeToColor(routeMode);
 
-            // CHANGED: Strictly check for 'Bus'.
-            // Previous logic forced numbered routes (like Tram 19) to be buses.
-            // Now, if routeMode is 'Tram', isBusRoute will be false -> straight lines.
+            // Only true 'Bus' should use OSRM driving
             const isBusRoute = routeMode === 'Bus';
 
             if (isBusRoute && coords.length >= 2) {
                 // OSRM (Roads) - Only for Buses
-                clearConstructedRoute();
                 await drawTripWithOSRM(tripId, routeName, coords, stops, routeColor);
             } else {
                 // Straight Lines - For Trams, U-Bahn, S-Bahn
@@ -866,6 +911,7 @@ document.addEventListener('DOMContentLoaded', () => {
             setStatus(`Failed to draw trip ${tripId}`, 'error');
         }
     }
+
 
     async function drawTripWithOSRM(tripId, routeName, coords, stops, color) {
         try {
@@ -894,19 +940,23 @@ document.addEventListener('DOMContentLoaded', () => {
                 setStatus(`Showing bus trip ${tripId} (${routeName}) following roads`, 'success');
             } else {
                 // Fallback to straight lines
+                // --- PATCH: ensure fallback polyline has a className so it can be cleared ---
+                /* inside drawTripWithOSRM catch/fallback: */
                 activeRouteLayer = L.layerGroup();
                 L.polyline(coords, {
                     color: color,
                     weight: 5,
-                    opacity: 0.9
+                    opacity: 0.9,
+                    className: 'bus-route-line' // tag so sweep can remove it
                 }).addTo(activeRouteLayer);
                 addStopMarkersToLayer(stops, color);
                 activeRouteLayer.addTo(map);
-                
+
                 if (coords.length) {
                     map.fitBounds(coords, { padding: [40, 40] });
                 }
                 setStatus(`Showing bus trip ${tripId} (${routeName})`, 'success');
+
             }
         } catch (error) {
             console.warn('OSRM routing failed, using straight lines', error);
@@ -926,6 +976,15 @@ document.addEventListener('DOMContentLoaded', () => {
             setStatus(`Showing bus trip ${tripId} (${routeName})`, 'success');
         }
     }
+
+    // --- NEW helper: ensure previous transport overlays cleared before drawing ---
+    function ensureNoActiveTransportRoute() {
+        // central single call so all drawing functions use same behavior
+        if (transportRouteActive || activeRouteLayer || (activeLayers && activeLayers.length)) {
+            clearRouteOverlays();
+        }
+    }
+
 
     // Helper function to sort coordinates by proximity (nearest neighbor)
     function sortCoordinatesByProximity(coords) {
@@ -1218,13 +1277,19 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        // Hide any transport route currently shown
-        clearTransportRoute();
+        // NEW: Fully clear any existing transport/route overlays (including stray layers added by popup-drawn routes),
+        // but keep pinned markers. This ensures a bus/tram route drawn from a stop is removed when we draw a new marker route.
+        clearRouteOverlays();
 
-        // Clear previous route layers (keep pinned markers)
-        activeLayers = activeLayers.filter(l => l !== startMarker && l !== endMarker);
-        activeLayers.forEach(l => map.removeLayer(l));
-        activeLayers = [];
+        // Clear previous constructed-route layers (we keep pinned markers startMarker/endMarker if present)
+        // Note: clearRouteOverlays() already clears activeLayers/activeRouteLayer, but keep defensive reset.
+        activeLayers = activeLayers.filter(l => l === startMarker || l === endMarker);
+        activeLayers.forEach(l => {
+            // ensure we don't accidentally remove start/end markers here
+            if (l !== startMarker && l !== endMarker) {
+                try { if (map.hasLayer(l)) map.removeLayer(l); } catch (e) {}
+            }
+        });
 
         setStatus('Routing...', 'idle');
         findPathBtn.textContent = 'Calculating...';
@@ -1255,11 +1320,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 const results = await Promise.all(promises);
 
                 // Calculate total distance
-                const totalDistance = results.reduce((sum, result) => sum + result.distance, 0);
+                const totalDistance = results.reduce((sum, result) => sum + (result.distance || 0), 0);
                 
                 results.forEach((result, index) => {
-                    if(result.line) {
+                    if (result.line) {
                         result.line.addTo(map);
+                        // tag and track constructed-route lines so they get cleared later
                         activeLayers.push(result.line);
                     }
 
@@ -1269,7 +1335,8 @@ document.addEventListener('DOMContentLoaded', () => {
                             radius: 4, 
                             color: '#000', 
                             fillColor: '#fff', 
-                            fillOpacity: 1
+                            fillOpacity: 1,
+                            className: 'transition-stop'
                         }).addTo(map).bindTooltip(`${result.mode} to ${result.destinationName}`);
                         activeLayers.push(startMarker);
 
@@ -1278,7 +1345,8 @@ document.addEventListener('DOMContentLoaded', () => {
                             radius: 4,
                             color: '#000',
                             fillColor: '#fff',
-                            fillOpacity: 1
+                            fillOpacity: 1,
+                            className: 'transition-stop'
                         }).addTo(map).bindTooltip(`Arrive: ${result.destinationName}`);
                         activeLayers.push(endMarker);
                     }
@@ -1292,7 +1360,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 map.fitBounds(bounds, { padding: [60, 60] });
 
                 // Update route summary
-                // Update route summary with full color matching
                 routeSummary.innerHTML = `
                     <div class="route-summary-header">
                         <strong>Total Distance: ${formatDistance(totalDistance)}</strong>
@@ -1328,6 +1395,7 @@ document.addEventListener('DOMContentLoaded', () => {
             findPathBtn.textContent = 'Draw route';
         }
     };
+
 
     // Helper function to get transport icons
     function getTransportIcon(mode) {
