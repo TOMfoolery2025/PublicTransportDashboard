@@ -32,6 +32,6 @@ async fn rocket() -> _ {
         .manage(Arc::clone(&updates))
         .mount("/", routes![
             endpoints::agency_by_id, endpoints::all_stops, endpoints::departures_at_stop,
-            endpoints::all_stops_for_trip, endpoints::get_stop_by_id
+            endpoints::all_stops_for_trip, endpoints::get_stop_by_id, endpoints::live_trip_info
         ])
 }

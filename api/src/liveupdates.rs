@@ -15,7 +15,7 @@ pub mod gtfs {
     include!(concat!(env!("OUT_DIR"), "/transit_realtime.rs"));
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct GTFSTime {
 
     pub delay: i32,
@@ -47,7 +47,7 @@ impl GTFSTime {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ScheduledStop {
     pub stop_sequence: u32,
     pub arrival: GTFSTime,
@@ -55,7 +55,7 @@ pub struct ScheduledStop {
     pub canceled: bool
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Update {
     pub trip_id: i64,
     pub start_date: String,
@@ -229,6 +229,9 @@ pub async fn update_listener(update_store: Arc<UpdateStore>) {
                     stops,
                     canceled: update_canceled
                 };
+                if update_store.trip_updates.contains_key(&trip_id) {
+                    update_store.trip_updates.remove(&trip_id);
+                }
                 update_store.trip_updates.insert(trip_id, update);
             }
         }
