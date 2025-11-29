@@ -671,7 +671,6 @@ document.addEventListener('DOMContentLoaded', () => {
 
             const distanceHtml = stopData.distance
                 ? `<div style="font-size: 0.85em; color: #666; margin-bottom: 8px;">
-                     ${formatDistance(stopData.distance)} from city center
                    </div>`
                 : '';
 
@@ -680,7 +679,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     <div class="stop-popup__name">${stopData.name}</div>
                     ${distanceHtml}
                     <div class="stop-popup__section">
-                        <div class="stop-popup__section-title">Upcoming departures (Live):</div>
+                        <div class="stop-popup__section-title">Upcoming departures:</div>
                         ${departuresHtml}
                     </div>
                 </div>
@@ -691,22 +690,6 @@ document.addEventListener('DOMContentLoaded', () => {
             } else {
                 marker.bindPopup(html, { closeButton: true }).openPopup();
             }
-
-            setTimeout(() => {
-                const popupEl = marker.getPopup().getElement();
-                if (popupEl) {
-                    const links = popupEl.querySelectorAll('.route-link');
-                    links.forEach(link => {
-                        link.addEventListener('click', (evt) => {
-                            evt.preventDefault();
-                            const routeName = link.dataset.route;
-                            const tripId = link.dataset.trip;
-                            if (tripId) drawTripRoute(tripId, routeName);
-                            else if (routeName) drawRouteByName(routeName);
-                        });
-                    });
-                }
-            }, 50);
         };
 
         await updatePopupContent();
@@ -728,6 +711,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function drawRouteByName(routeName) {
+        console.log("Drawing route by name:", routeName);
         try {
             // Always remove any previously drawn overlays (keep pinned markers)
             clearRouteOverlays();
@@ -1048,11 +1032,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 evt.preventDefault();
                 const routeName = link.dataset.route;
                 const tripId = link.dataset.trip;
-                if (tripId) {
-                    drawTripRoute(tripId, routeName);
-                } else if (routeName) {
-                    drawRouteByName(routeName);
-                }
+                drawTripRoute(tripId, routeName);
             });
         });
     });
