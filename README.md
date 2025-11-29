@@ -22,7 +22,7 @@ Knowledge graph usage
 
 ## 2) Architecture Overview
 Layers
-- Rust API (`api/src`): Rocket routes for agency, stops, departures, trip stop sequences; uses SQLite (GTFS tables) and Neo4j (stop graph). Live updates stored in DashMap.
+- Rust API (`api/src`): Rocket routes for agency, stops, departures, trip stop sequences; uses SQLite (GTFS tables) and Neo4j (stop graph). 
 - UI/pathfinding shell (`app.py`): Flask routes for UI, Neo4j shortestPath, route geometry, trip stops proxy, minimal stop info.
 - Frontend (`templates/index.html`, `static/script.js`, `static/style.css`): Leaflet map, search/pins, routing render, popups, basemap control. Stop popups and departures are rendered client-side in JS.
 - Data: Neo4j transit graph (Stop nodes, `TRANSIT_ROUTE`/`WALK` edges). SQLite GTFS for Rocket endpoints. civiguild for departures and trip stops.
