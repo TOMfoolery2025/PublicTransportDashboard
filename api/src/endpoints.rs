@@ -4,7 +4,8 @@ use chrono::{Datelike, Local, TimeZone};
 use chrono_tz::Europe::Berlin;
 use dashmap::DashSet;
 use gtfs_structures::Agency;
-use neo4rs::{query, Graph};
+use neo4rs::{query, BoltLocalDateTime, Graph};
+use neo4rs::BoltType::DateTime;
 use rocket::{Rocket, Build, futures, post, get, delete, Error, Response, response, State};
 use rocket::fairing::{self, AdHoc};
 use rocket::futures::TryFutureExt;
@@ -210,7 +211,8 @@ pub async fn departures_at_stop(mut db: Connection<Transport>,
     if let Ok(rows) = query {
         for row in rows {
             let trip_id = row.get::<i64, _>("trip_id");
-            let live_data_option = scheduled_departures_option.as_ref().and_then(|scheduled_departures| {
+            let live_data_option = scheduled_departures_option.as_ref().
+                and_then(|scheduled_departures| {
                 scheduled_departures.iter()
                     .find(|departure| departure.trip_id == trip_id)
             });
@@ -222,11 +224,11 @@ pub async fn departures_at_stop(mut db: Connection<Transport>,
                     let departure_time_string = row.get::<String, _>("departure_time");
                     let departure_time_parts: Vec<&str> = departure_time_string.split(':')
                         .collect();
-                    let today_cest = cest_time.date_naive().and_hms_opt(
-                        departure_time_parts[0].parse::<u32>().unwrap_or(0),
-                        departure_time_parts[1].parse::<u32>().unwrap_or(0),
-                        departure_time_parts[2].parse::<u32>().unwrap_or(0),
-                    ).unwrap();
+                    let today_cest = cest_time.date().and_hms(
+                        departure_time_parts[0].parse().unwrap_or(0),
+                        departure_time_parts[1].parse().unwrap_or(0),
+                        departure_time_parts[2].parse().unwrap_or(0),
+                    );
                     (today_cest.timestamp(), 0 , false)
                 };
             let trip = TripDTO {
@@ -242,6 +244,9 @@ pub async fn departures_at_stop(mut db: Connection<Transport>,
         }
     }
     trips.sort_by_key(|t| t.departure_timestamp);
+    if trips.len() > 10 {
+        trips.truncate(10);
+    }
     Ok(Json(trips))
 }
 

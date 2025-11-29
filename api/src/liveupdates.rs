@@ -45,6 +45,13 @@ impl GTFSTime {
     pub fn is_in_future(&self) -> bool {
         !self.is_in_past()
     }
+
+    pub fn to_purge(&self) -> bool {
+        let now = Utc::now().with_timezone(&Berlin);
+        self.timestamp + self.delay as i64 + 300 < now.timestamp()
+    }
+
+
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -222,10 +229,14 @@ pub async fn update_listener(update_store: Arc<UpdateStore>) {
                     }
                 }
                 let update_canceled = stops.iter().all(|s| s.canceled);
-                let update = Update {
+                let update = Update {   
                     trip_id,
                     start_date,
-                    next_stop_index: 0,
+                    next_stop_index: stops.iter()
+                        .filter(|s| s.departure.is_in_future())
+                        .map(|s| s.stop_sequence)
+                        .min()
+                        .unwrap_or(0) as i64,
                     stops,
                     canceled: update_canceled
                 };
